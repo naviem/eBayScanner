@@ -1,0 +1,16 @@
+{
+  "name": "ebay-scanner",
+  "version": "1.0.0",
+  "description": "eBay store and search monitor with Discord notifications",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "config": "node config-manager.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  }
+} 
