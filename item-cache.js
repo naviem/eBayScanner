@@ -12,13 +12,13 @@ class ItemCache {
         try {
             const data = await fs.readFile(this.cacheFile, 'utf8');
             const parsed = JSON.parse(data);
-            // Convert the plain object back to a Map with Sets
-            this.cache = new Map(
-                Object.entries(parsed).map(([key, value]) => [
-                    key,
-                    new Set(Array.isArray(value) ? value : [])
-                ])
-            );
+            
+            // Convert plain object back to Map
+            this.cache = new Map();
+            for (const [key, value] of Object.entries(parsed)) {
+                // Convert arrays back to Sets
+                this.cache.set(key, new Set(value));
+            }
             console.log('Loaded existing item cache');
         } catch (error) {
             console.log('No existing cache file found, starting fresh');
@@ -28,13 +28,11 @@ class ItemCache {
 
     async saveCache() {
         try {
-            // Convert Map and Sets to plain objects for JSON serialization
-            const data = Object.fromEntries(
-                Array.from(this.cache.entries()).map(([key, value]) => [
-                    key,
-                    Array.from(value)
-                ])
-            );
+            // Convert Map to plain object and Sets to arrays for JSON serialization
+            const data = {};
+            for (const [key, value] of this.cache.entries()) {
+                data[key] = Array.from(value);
+            }
             await fs.writeFile(this.cacheFile, JSON.stringify(data, null, 2));
         } catch (error) {
             console.error('Error saving cache:', error.message);
@@ -45,9 +43,9 @@ class ItemCache {
         return `${type}:${identifier}`;
     }
 
-    hasSeenItems(type, identifier) {
+    hasItems(type, identifier) {
         const key = this.getCacheKey(type, identifier);
-        return this.cache.has(key);
+        return this.cache.has(key) && this.cache.get(key).size > 0;
     }
 
     isFirstScan(type, identifier) {
@@ -57,19 +55,25 @@ class ItemCache {
 
     isNewItem(type, identifier, itemId) {
         const key = this.getCacheKey(type, identifier);
-        const seenItems = this.cache.get(key) || new Set();
-        return !seenItems.has(itemId);
+        if (!this.cache.has(key)) {
+            this.cache.set(key, new Set());
+        }
+        const seenItems = this.cache.get(key);
+        if (!seenItems.has(itemId)) {
+            seenItems.add(itemId);
+            this.saveCache(); // Save after each new item
+            return true;
+        }
+        return false;
     }
 
     async updateSeenItems(type, identifier, itemIds) {
         const key = this.getCacheKey(type, identifier);
-        const seenItems = this.cache.get(key) || new Set();
-        
-        for (const itemId of itemIds) {
-            seenItems.add(itemId);
+        if (!this.cache.has(key)) {
+            this.cache.set(key, new Set());
         }
-        
-        this.cache.set(key, seenItems);
+        const seenItems = this.cache.get(key);
+        itemIds.forEach(id => seenItems.add(id));
         await this.saveCache();
     }
 
