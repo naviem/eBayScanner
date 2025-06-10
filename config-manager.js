@@ -87,105 +87,62 @@ async function listSearches(config) {
     });
 }
 
-async function addWebhook(config) {
-    console.log('\n=== Add New Webhook ===');
-    const name = await question('Enter webhook name: ');
-    const url = await question('Enter Discord webhook URL: ');
-    const isDefault = (await question('Set as default webhook? (y/n): ')).toLowerCase() === 'y';
-
-    // If this is set as default, unset any existing default
-    if (isDefault) {
-        config.webhooks.forEach(webhook => webhook.default = false);
+// Helper function to extract store ID from URL
+function extractStoreId(url) {
+    try {
+        // Remove any trailing slashes and get the last part of the URL
+        const cleanUrl = url.replace(/\/$/, '');
+        const storeId = cleanUrl.split('/').pop();
+        return storeId;
+    } catch (error) {
+        return null;
     }
-
-    config.webhooks.push({
-        name,
-        url,
-        default: isDefault
-    });
-
-    await saveConfig(config);
-    console.log('Webhook added successfully!');
-}
-
-async function deleteWebhook(config) {
-    await listWebhooks(config);
-    if (config.webhooks.length === 0) return;
-
-    const index = parseInt(await question('\nEnter webhook number to delete (0 to cancel): ')) - 1;
-    if (index < 0 || index >= config.webhooks.length) {
-        console.log('Invalid webhook number.');
-        return;
-    }
-
-    const webhook = config.webhooks[index];
-    const confirm = await question(`Are you sure you want to delete ${webhook.name}? (y/n): `);
-    if (confirm.toLowerCase() === 'y') {
-        // Remove webhook from stores and searches
-        config.stores.forEach(store => {
-            if (store.webhook === webhook.name) {
-                store.webhook = null;
-            }
-        });
-        config.searches.forEach(search => {
-            if (search.webhook === webhook.name) {
-                search.webhook = null;
-            }
-        });
-
-        config.webhooks.splice(index, 1);
-        await saveConfig(config);
-        console.log('Webhook deleted successfully!');
-    }
-}
-
-async function setDefaultWebhook(config) {
-    await listWebhooks(config);
-    if (config.webhooks.length === 0) return;
-
-    const index = parseInt(await question('\nEnter webhook number to set as default (0 to cancel): ')) - 1;
-    if (index < 0 || index >= config.webhooks.length) {
-        console.log('Invalid webhook number.');
-        return;
-    }
-
-    // Unset current default
-    config.webhooks.forEach(webhook => webhook.default = false);
-    // Set new default
-    config.webhooks[index].default = true;
-
-    await saveConfig(config);
-    console.log(`Webhook ${config.webhooks[index].name} set as default!`);
 }
 
 async function addStore(config) {
     console.log('\n=== Add New Store ===');
-    const id = await question('Enter store username: ');
-    const name = await question('Enter store display name: ');
-    const interval = parseInt(await question('Enter check interval (minutes): '));
-    const enabled = (await question('Enable store? (y/n): ')).toLowerCase() === 'y';
+    
+    // Get store URL or ID
+    const storeInput = await question('Enter store URL or ID (e.g., https://www.ebay.ca/str/surplusbydesign or surplusbydesign): ');
+    if (!storeInput) {
+        console.log('Store URL/ID is required');
+        return;
+    }
 
-    // Select webhook
-    let webhook = null;
-    if (config.webhooks.length > 0) {
-        await listWebhooks(config);
-        const useCustom = (await question('Use custom webhook? (y/n): ')).toLowerCase() === 'y';
-        if (useCustom) {
-            const webhookIndex = parseInt(await question('Enter webhook number: ')) - 1;
-            if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
-                webhook = config.webhooks[webhookIndex].name;
-            }
+    // Get check interval
+    const intervalInput = await question('Enter check interval in minutes (default: 5): ');
+    const interval = intervalInput ? parseInt(intervalInput) : 5;
+    if (isNaN(interval) || interval < 1) {
+        console.log('Invalid interval. Using default of 5 minutes.');
+        interval = 5;
+    }
+
+    // Get webhook assignment
+    console.log('\nAvailable webhooks:');
+    config.webhooks.forEach((webhook, index) => {
+        console.log(`${index + 1}. ${webhook.name} (${webhook.url.substring(0, 30)}...)`);
+    });
+    
+    const webhookChoice = await question('Choose webhook number (press Enter for default): ');
+    let webhookId = null;
+    
+    if (webhookChoice) {
+        const webhookIndex = parseInt(webhookChoice) - 1;
+        if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
+            webhookId = config.webhooks[webhookIndex].id;
         }
     }
 
-    config.stores.push({
-        id,
-        name,
+    // Add the store
+    const store = {
+        id: storeInput,
+        name: storeInput.split('/').pop().split('?')[0], // Extract name from URL or use ID
         interval,
-        enabled,
-        webhook
-    });
+        enabled: true,
+        webhookId
+    };
 
+    config.stores.push(store);
     await saveConfig(config);
     console.log('Store added successfully!');
 }
@@ -194,22 +151,23 @@ async function addSearch(config) {
     console.log('\n=== Add New Search ===');
     const name = await question('Enter search name: ');
     const url = await question('Enter eBay search URL: ');
-    const interval = parseInt(await question('Enter check interval (minutes): '));
+    const interval = parseInt(await question('Enter check interval in minutes: '));
     const enabled = (await question('Enable search? (y/n): ')).toLowerCase() === 'y';
 
-    // Select webhook
-    let webhook = null;
-    if (config.webhooks.length > 0) {
-        await listWebhooks(config);
-        const useCustom = (await question('Use custom webhook? (y/n): ')).toLowerCase() === 'y';
-        if (useCustom) {
-            const webhookIndex = parseInt(await question('Enter webhook number: ')) - 1;
-            if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
-                webhook = config.webhooks[webhookIndex].name;
-            }
-        }
+    // List available webhooks
+    console.log('\nAvailable webhooks:');
+    config.webhooks.forEach((webhook, index) => {
+        console.log(`${index + 1}. ${webhook.name}`);
+    });
+    
+    const webhookIndex = parseInt(await question('Select webhook (number): ')) - 1;
+    if (webhookIndex < 0 || webhookIndex >= config.webhooks.length) {
+        console.error('Invalid webhook selection');
+        return;
     }
-
+    
+    const webhook = config.webhooks[webhookIndex].name;
+    
     config.searches.push({
         name,
         url,
@@ -217,7 +175,7 @@ async function addSearch(config) {
         enabled,
         webhook
     });
-
+    
     await saveConfig(config);
     console.log('Search added successfully!');
 }
@@ -260,7 +218,7 @@ async function deleteSearch(config) {
     }
 }
 
-async function toggleStore(config) {
+async function toggleStoreStatus(config) {
     await listStores(config);
     if (config.stores.length === 0) return;
 
@@ -272,10 +230,10 @@ async function toggleStore(config) {
 
     config.stores[index].enabled = !config.stores[index].enabled;
     await saveConfig(config);
-    console.log(`Store ${config.stores[index].enabled ? 'enabled' : 'disabled'} successfully!`);
+    console.log(`Store ${config.stores[index].name} is now ${config.stores[index].enabled ? 'enabled' : 'disabled'}`);
 }
 
-async function toggleSearch(config) {
+async function toggleSearchStatus(config) {
     await listSearches(config);
     if (config.searches.length === 0) return;
 
@@ -287,11 +245,11 @@ async function toggleSearch(config) {
 
     config.searches[index].enabled = !config.searches[index].enabled;
     await saveConfig(config);
-    console.log(`Search ${config.searches[index].enabled ? 'enabled' : 'disabled'} successfully!`);
+    console.log(`Search ${config.searches[index].name} is now ${config.searches[index].enabled ? 'enabled' : 'disabled'}`);
 }
 
 async function updateInterval(config) {
-    console.log('\n=== Update Interval ===');
+    console.log('\n=== Update Check Interval ===');
     console.log('1. Update store interval');
     console.log('2. Update search interval');
     const choice = await question('Enter your choice (1-2): ');
@@ -324,8 +282,6 @@ async function updateInterval(config) {
         config.searches[index].interval = interval;
         await saveConfig(config);
         console.log('Search interval updated successfully!');
-    } else {
-        console.log('Invalid choice.');
     }
 }
 
@@ -351,13 +307,10 @@ async function updateWebhook(config) {
             const webhookIndex = parseInt(await question('Enter webhook number: ')) - 1;
             if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
                 config.stores[index].webhook = config.webhooks[webhookIndex].name;
+                await saveConfig(config);
+                console.log('Store webhook updated successfully!');
             }
-        } else {
-            config.stores[index].webhook = null;
         }
-
-        await saveConfig(config);
-        console.log('Store webhook updated successfully!');
     } else if (choice === '2') {
         await listSearches(config);
         if (config.searches.length === 0) return;
@@ -374,15 +327,10 @@ async function updateWebhook(config) {
             const webhookIndex = parseInt(await question('Enter webhook number: ')) - 1;
             if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
                 config.searches[index].webhook = config.webhooks[webhookIndex].name;
+                await saveConfig(config);
+                console.log('Search webhook updated successfully!');
             }
-        } else {
-            config.searches[index].webhook = null;
         }
-
-        await saveConfig(config);
-        console.log('Search webhook updated successfully!');
-    } else {
-        console.log('Invalid choice.');
     }
 }
 
@@ -397,7 +345,6 @@ async function editWebhook(config) {
     }
 
     const webhook = config.webhooks[index];
-    console.log(`\nEditing webhook: ${webhook.name}`);
     console.log(`Current URL: ${webhook.url}`);
     
     const newUrl = await question('Enter new webhook URL (press Enter to keep current): ');
@@ -405,8 +352,6 @@ async function editWebhook(config) {
         webhook.url = newUrl.trim();
         await saveConfig(config);
         console.log('Webhook URL updated successfully!');
-    } else {
-        console.log('No changes made.');
     }
 }
 
@@ -415,19 +360,19 @@ async function showMenu() {
     
     while (true) {
         console.log('\n=== eBay Scanner Configuration ===');
-        console.log('=== Webhooks ===');
+        console.log('Webhook Management:');
         console.log('1. List all webhooks');
         console.log('2. Add new webhook');
         console.log('3. Edit webhook URL');
         console.log('4. Delete webhook');
         console.log('5. Set default webhook');
         console.log('6. Update webhook assignment');
-        console.log('\n=== Stores ===');
+        console.log('\nStore Management:');
         console.log('7. List all stores');
         console.log('8. Add new store');
         console.log('9. Delete store');
         console.log('10. Toggle store status');
-        console.log('\n=== Searches ===');
+        console.log('\nSearch Management:');
         console.log('11. List all searches');
         console.log('12. Add new search');
         console.log('13. Delete search');
@@ -438,6 +383,9 @@ async function showMenu() {
         const choice = await question('\nEnter your choice (0-15): ');
 
         switch (choice) {
+            case '0':
+                console.log('Exiting...');
+                return;
             case '1':
                 await listWebhooks(config);
                 break;
@@ -466,7 +414,7 @@ async function showMenu() {
                 await deleteStore(config);
                 break;
             case '10':
-                await toggleStore(config);
+                await toggleStoreStatus(config);
                 break;
             case '11':
                 await listSearches(config);
@@ -478,20 +426,19 @@ async function showMenu() {
                 await deleteSearch(config);
                 break;
             case '14':
-                await toggleSearch(config);
+                await toggleSearchStatus(config);
                 break;
             case '15':
                 await updateInterval(config);
                 break;
-            case '0':
-                console.log('Goodbye!');
-                rl.close();
-                return;
             default:
-                console.log('Invalid choice. Please try again.');
+                console.log('Invalid choice, please try again.');
         }
     }
 }
 
 // Start the configuration manager
-showMenu().catch(console.error); 
+showMenu().catch(error => {
+    console.error('Error:', error);
+    process.exit(1);
+}); 
