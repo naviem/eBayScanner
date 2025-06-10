@@ -27,6 +27,11 @@ try {
 // Initialize item cache
 const itemCache = new ItemCache();
 
+function getTimestamp() {
+    const now = new Date();
+    return `[${now.toLocaleTimeString()}]`;
+}
+
 async function loadConfig() {
     try {
         const configPath = path.join(__dirname, 'config.json');
@@ -51,14 +56,14 @@ async function loadConfig() {
 
 async function checkEbayStore(store) {
     try {
-        console.log(`Checking store: ${store.name}`);
+        console.log(`${getTimestamp()} Checking store: ${store.name}`);
         const items = await checkEbayStoreScraping(store.storeId);
         
         if (items.length > 0) {
             // Get the webhook configuration
             const webhookConfig = config.webhooks.find(w => w.name === store.webhook);
             if (!webhookConfig) {
-                console.error(`Webhook "${store.webhook}" not found in configuration`);
+                console.error(`${getTimestamp()} Webhook "${store.webhook}" not found in configuration`);
                 return;
             }
 
@@ -69,7 +74,7 @@ async function checkEbayStore(store) {
             const itemsToNotify = isFirstScan ? items.slice(0, 2) : items;
             
             if (isFirstScan) {
-                console.log(`First scan: Only notifying about the newest 2 items out of ${items.length} found`);
+                console.log(`${getTimestamp()} First scan: Only notifying about the newest 2 items out of ${items.length} found`);
             }
 
             // Send notifications with rate limiting
@@ -81,20 +86,20 @@ async function checkEbayStore(store) {
             await itemCache.updateSeenItems('store', store.storeId, items.map(item => item.id));
         }
     } catch (error) {
-        console.error(`Error checking store ${store.name}:`, error.message);
+        console.error(`${getTimestamp()} Error checking store ${store.name}:`, error.message);
     }
 }
 
 async function checkEbaySearch(search) {
     try {
-        console.log(`Checking search: ${search.name}`);
+        console.log(`${getTimestamp()} Checking search: ${search.name}`);
         const items = await checkEbaySearchScraping(search.url);
         
         if (items.length > 0) {
             // Get the webhook configuration
             const webhookConfig = config.webhooks.find(w => w.name === search.webhook);
             if (!webhookConfig) {
-                console.error(`Webhook "${search.webhook}" not found in configuration`);
+                console.error(`${getTimestamp()} Webhook "${search.webhook}" not found in configuration`);
                 return;
             }
 
@@ -105,7 +110,7 @@ async function checkEbaySearch(search) {
             const itemsToNotify = isFirstScan ? items.slice(0, 2) : items;
             
             if (isFirstScan) {
-                console.log(`First scan: Only notifying about the newest 2 items out of ${items.length} found`);
+                console.log(`${getTimestamp()} First scan: Only notifying about the newest 2 items out of ${items.length} found`);
             }
 
             // Send notifications with rate limiting
@@ -117,7 +122,7 @@ async function checkEbaySearch(search) {
             await itemCache.updateSeenItems('search', search.url, items.map(item => item.id));
         }
     } catch (error) {
-        console.error(`Error checking search ${search.name}:`, error.message);
+        console.error(`${getTimestamp()} Error checking search ${search.name}:`, error.message);
     }
 }
 
@@ -221,7 +226,7 @@ async function checkEbayStoreScraping(storeId) {
 
         // Use the search API endpoint with seller filter
         const searchUrl = `https://www.ebay.ca/sch/i.html?_nkw=&_sacat=0&_sop=10&_dmd=2&_ipg=200&_ssn=${storeName}`;
-        console.log(`Fetching store items from: ${searchUrl}`);
+        console.log(`${getTimestamp()} Fetching store items from: ${searchUrl}`);
         
         const response = await axios.get(searchUrl, {
             headers: {
@@ -275,7 +280,7 @@ async function checkEbayStoreScraping(storeId) {
                 }
 
                 // Extract other item details
-                const title = $item.find('.s-item__title').text().trim();
+                const title = cleanTitle($item.find('.s-item__title').text());
                 const price = $item.find('.s-item__price').text().trim();
                 const condition = $item.find('.SECONDARY_INFO').text().trim();
                 const location = $item.find('.s-item__location').text().trim();
@@ -333,15 +338,15 @@ async function checkEbayStoreScraping(storeId) {
             }
         });
 
-        console.log(`Total items found on page: ${totalItemsFound}`);
-        console.log(`New items found: ${items.length}`);
+        console.log(`${getTimestamp()} Total items found on page: ${totalItemsFound}`);
+        console.log(`${getTimestamp()} New items found: ${items.length}`);
 
         return items;
     } catch (error) {
-        console.error('Error fetching store items:', error.message);
+        console.error(`${getTimestamp()} Error fetching store items:`, error.message);
         if (error.response) {
-            console.error('Response status:', error.response.status);
-            console.error('Response headers:', error.response.headers);
+            console.error(`${getTimestamp()} Response status:`, error.response.status);
+            console.error(`${getTimestamp()} Response headers:`, error.response.headers);
         }
         return [];
     }
@@ -349,7 +354,7 @@ async function checkEbayStoreScraping(storeId) {
 
 async function checkEbaySearchScraping(url) {
     try {
-        console.log(`Fetching search results from: ${url}`);
+        console.log(`${getTimestamp()} Fetching search results from: ${url}`);
         const response = await axios.get(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -397,7 +402,7 @@ async function checkEbaySearchScraping(url) {
                 }
 
                 // Extract other item details
-                const title = $item.find('.s-item__title').text().trim();
+                const title = cleanTitle($item.find('.s-item__title').text());
                 const price = $item.find('.s-item__price').text().trim();
                 const condition = $item.find('.SECONDARY_INFO').text().trim();
                 const location = $item.find('.s-item__location').text().trim();
@@ -455,8 +460,8 @@ async function checkEbaySearchScraping(url) {
             }
         });
 
-        console.log(`Total items found on page: ${totalItemsFound}`);
-        console.log(`New items found: ${items.length}`);
+        console.log(`${getTimestamp()} Total items found on page: ${totalItemsFound}`);
+        console.log(`${getTimestamp()} New items found: ${items.length}`);
         return items;
     } catch (error) {
         console.error('Error fetching search results:', error.message);
@@ -466,6 +471,9 @@ async function checkEbaySearchScraping(url) {
 
 async function sendDiscordNotification(webhook, item, type, source) {
     try {
+        console.log(`${getTimestamp()} Sending notification for item: ${item.title}`);
+        console.log(`${getTimestamp()} Using webhook: ${webhook.url}`);
+        
         const embed = {
             title: item.title,
             url: item.url,
@@ -478,12 +486,12 @@ async function sendDiscordNotification(webhook, item, type, source) {
                 },
                 {
                     name: 'Condition',
-                    value: item.condition,
+                    value: item.condition || 'Not specified',
                     inline: true
                 },
                 {
                     name: 'Location',
-                    value: item.location,
+                    value: item.location || 'Not specified',
                     inline: true
                 },
                 {
@@ -537,11 +545,26 @@ async function sendDiscordNotification(webhook, item, type, source) {
             });
         }
 
-        await axios.post(webhook.url, {
+        const message = {
+            content: `🔔 New item found in ${type} "${source}"!`,
             embeds: [embed]
-        });
+        };
+
+        await axios.post(webhook.url, message);
+        console.log(`${getTimestamp()} Discord notification sent successfully`);
+        
+        // Add a small delay between notifications to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
         console.error('Error sending Discord notification:', error.message);
+        if (error.response) {
+            console.error(`${getTimestamp()} Response status:`, error.response.status);
+            console.error(`${getTimestamp()} Response data:`, error.response.data);
+        }
+        // If we hit rate limits, wait longer
+        if (error.response?.status === 429) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
     }
 }
 
@@ -553,13 +576,13 @@ async function startMonitoring() {
         // Initialize item cache
         await itemCache.loadCache();
         
-        console.log(`Starting eBay scanner with ${config.stores.length} stores and ${config.searches.length} searches`);
-        console.log(`Using ${hasEbayCredentials ? 'eBay API' : 'web scraping'} method`);
+        console.log(`${getTimestamp()} Starting eBay scanner with ${config.stores.length} stores and ${config.searches.length} searches`);
+        console.log(`${getTimestamp()} Using ${hasEbayCredentials ? 'eBay API' : 'web scraping'} method`);
 
         // Schedule store checks
         for (const store of config.stores) {
             if (store.enabled) {
-                console.log(`Scheduling store ${store.name} to check every ${store.interval} minutes`);
+                console.log(`${getTimestamp()} Scheduling store ${store.name} to check every ${store.interval} minutes`);
                 cron.schedule(`*/${store.interval} * * * *`, () => checkEbayStore(store));
             }
         }
@@ -567,7 +590,7 @@ async function startMonitoring() {
         // Schedule search checks
         for (const search of config.searches) {
             if (search.enabled) {
-                console.log(`Scheduling search ${search.name} to check every ${search.interval} minutes`);
+                console.log(`${getTimestamp()} Scheduling search ${search.name} to check every ${search.interval} minutes`);
                 cron.schedule(`*/${search.interval} * * * *`, () => checkEbaySearch(search));
             }
         }
@@ -591,4 +614,15 @@ async function startMonitoring() {
 }
 
 // Start the monitoring
-startMonitoring(); 
+startMonitoring();
+
+// Add this helper function at the top of the file after the imports
+function cleanTitle(title) {
+    return title
+        .replace(/^New Listing/i, '')
+        .replace(/^New/i, '')
+        .replace(/^Hot/i, '')
+        .replace(/^Best Match/i, '')
+        .replace(/^Shop on eBay/i, '')
+        .trim();
+} 

@@ -1,6 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const readline = require('readline');
+const { v4: uuidv4 } = require('uuid');
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -8,6 +9,56 @@ const rl = readline.createInterface({
 });
 
 const question = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+const colors = {
+    reset: '\x1b[0m',
+    bright: '\x1b[1m',
+    dim: '\x1b[2m',
+    underscore: '\x1b[4m',
+    blink: '\x1b[5m',
+    reverse: '\x1b[7m',
+    hidden: '\x1b[8m',
+    
+    fg: {
+        black: '\x1b[30m',
+        red: '\x1b[31m',
+        green: '\x1b[32m',
+        yellow: '\x1b[33m',
+        blue: '\x1b[34m',
+        magenta: '\x1b[35m',
+        cyan: '\x1b[36m',
+        white: '\x1b[37m',
+        crimson: '\x1b[38m'
+    },
+    bg: {
+        black: '\x1b[40m',
+        red: '\x1b[41m',
+        green: '\x1b[42m',
+        yellow: '\x1b[43m',
+        blue: '\x1b[44m',
+        magenta: '\x1b[45m',
+        cyan: '\x1b[46m',
+        white: '\x1b[47m',
+        crimson: '\x1b[48m'
+    }
+};
+
+function getTimestamp() {
+    const now = new Date();
+    return `[${now.toLocaleTimeString()}]`;
+}
+
+function showSuccess(message) {
+    console.log(colors.fg.green + `${getTimestamp()} ${message}` + colors.reset);
+}
+
+function showError(message) {
+    console.log(colors.fg.red + `${getTimestamp()} ${message}` + colors.reset);
+}
+
+function showInfo(message) {
+    console.log(colors.fg.cyan + `${getTimestamp()} ${message}` + colors.reset);
+}
 
 async function loadConfig() {
     try {
@@ -36,23 +87,26 @@ async function saveConfig(config) {
     try {
         const configPath = path.join(__dirname, 'config.json');
         await fs.writeFile(configPath, JSON.stringify(config, null, 4));
-        console.log('Configuration saved successfully!');
+        showSuccess('Configuration saved successfully!');
     } catch (error) {
         console.error('Error saving config:', error.message);
     }
 }
 
 async function listWebhooks(config) {
-    console.log('\n=== Discord Webhooks ===');
+    console.log('\n' + colors.fg.yellow + `${getTimestamp()} === Webhooks ===` + colors.reset);
     if (config.webhooks.length === 0) {
-        console.log('No webhooks configured.');
+        showInfo('No webhooks configured');
         return;
     }
+    
     config.webhooks.forEach((webhook, index) => {
-        console.log(`${index + 1}. ${webhook.name}`);
-        console.log(`   URL: ${webhook.url}`);
-        console.log(`   Default: ${webhook.default ? 'Yes' : 'No'}`);
-        console.log('---');
+        console.log(colors.fg.cyan + `\n${getTimestamp()} ${index + 1}. ${webhook.name}` + colors.reset);
+        console.log(`   URL: ${webhook.url.substring(0, 30)}...`);
+        console.log(`   ID: ${webhook.id}`);
+        if (webhook.id === config.defaultWebhookId) {
+            console.log(colors.fg.green + '   Status: Default' + colors.reset);
+        }
     });
 }
 
@@ -359,26 +413,30 @@ async function showMenu() {
     const config = await loadConfig();
     
     while (true) {
-        console.log('\n=== eBay Scanner Configuration ===');
-        console.log('Webhook Management:');
+        console.log('\n' + colors.fg.cyan + `${getTimestamp()} === eBay Scanner Configuration Manager ===` + colors.reset);
+        console.log(colors.fg.yellow + 'Webhook Management:' + colors.reset);
         console.log('1. List all webhooks');
         console.log('2. Add new webhook');
         console.log('3. Edit webhook URL');
         console.log('4. Delete webhook');
         console.log('5. Set default webhook');
         console.log('6. Update webhook assignment');
-        console.log('\nStore Management:');
+        
+        console.log('\n' + colors.fg.yellow + 'Store Management:' + colors.reset);
         console.log('7. List all stores');
         console.log('8. Add new store');
         console.log('9. Delete store');
         console.log('10. Toggle store status');
-        console.log('\nSearch Management:');
+        
+        console.log('\n' + colors.fg.yellow + 'Search Management:' + colors.reset);
         console.log('11. List all searches');
         console.log('12. Add new search');
         console.log('13. Delete search');
         console.log('14. Toggle search status');
         console.log('15. Update check interval');
-        console.log('\n0. Exit');
+        
+        console.log('\n' + colors.fg.yellow + 'Other:' + colors.reset);
+        console.log('0. Exit');
 
         const choice = await question('\nEnter your choice (0-15): ');
 
