@@ -409,6 +409,74 @@ async function editWebhook(config) {
     }
 }
 
+async function addWebhook(config) {
+    console.log('\n=== Add New Webhook ===');
+    
+    const name = await question('Enter webhook name: ');
+    if (!name) {
+        console.log('Webhook name is required.');
+        return;
+    }
+
+    // Check if webhook name already exists
+    if (config.webhooks.some(w => w.name === name)) {
+        console.log('A webhook with this name already exists.');
+        return;
+    }
+
+    const url = await question('Enter Discord webhook URL: ');
+    if (!url) {
+        console.log('Webhook URL is required.');
+        return;
+    }
+
+    // Validate URL format
+    try {
+        new URL(url);
+    } catch (e) {
+        console.log('Invalid URL format. Please enter a valid Discord webhook URL.');
+        return;
+    }
+
+    // Add new webhook
+    config.webhooks.push({
+        name,
+        url
+    });
+
+    // Save configuration
+    await saveConfig(config);
+    console.log(`Webhook "${name}" added successfully.`);
+}
+
+async function deleteWebhook(config) {
+    console.log('\n=== Delete Webhook ===');
+    
+    // Show current webhooks
+    console.log('\nCurrent webhooks:');
+    config.webhooks.forEach((webhook, index) => {
+        console.log(`${index + 1}. ${webhook.name}`);
+    });
+
+    const index = parseInt(await question('\nEnter the number of the webhook to delete: ')) - 1;
+    
+    if (isNaN(index) || index < 0 || index >= config.webhooks.length) {
+        console.log('Invalid selection.');
+        return;
+    }
+
+    const webhook = config.webhooks[index];
+    const confirm = await question(`Are you sure you want to delete webhook "${webhook.name}"? (y/n): `);
+    
+    if (confirm.toLowerCase() === 'y') {
+        config.webhooks.splice(index, 1);
+        await saveConfig(config);
+        console.log(`Webhook "${webhook.name}" deleted successfully.`);
+    } else {
+        console.log('Deletion cancelled.');
+    }
+}
+
 async function showMenu() {
     const config = await loadConfig();
     
