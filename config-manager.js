@@ -2,6 +2,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const readline = require('readline');
 const { v4: uuidv4 } = require('uuid');
+const usageStats = require('./usage-stats');
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -153,7 +154,8 @@ function extractStoreId(url) {
     }
 }
 
-async function addStore(config) {
+async function addStore() {
+    const config = await loadConfig();
     console.log('\n=== Add New Store ===');
     
     // Get store URL or ID
@@ -165,7 +167,7 @@ async function addStore(config) {
 
     // Get check interval
     const intervalInput = await question('Enter check interval in minutes (default: 5): ');
-    const interval = intervalInput ? parseInt(intervalInput) : 5;
+    let interval = intervalInput ? parseInt(intervalInput) : 5;
     if (isNaN(interval) || interval < 1) {
         console.log('Invalid interval. Using default of 5 minutes.');
         interval = 5;
@@ -201,7 +203,8 @@ async function addStore(config) {
     console.log('Store added successfully!');
 }
 
-async function addSearch(config) {
+async function addSearch() {
+    const config = await loadConfig();
     console.log('\n=== Add New Search ===');
     const name = await question('Enter search name: ');
     const url = await question('Enter eBay search URL: ');
@@ -234,182 +237,127 @@ async function addSearch(config) {
     console.log('Search added successfully!');
 }
 
-async function deleteStore(config) {
-    await listStores(config);
-    if (config.stores.length === 0) return;
-
-    const index = parseInt(await question('\nEnter store number to delete (0 to cancel): ')) - 1;
-    if (index < 0 || index >= config.stores.length) {
-        console.log('Invalid store number.');
-        return;
-    }
-
+async function deleteStore(index) {
+    const config = await loadConfig();
     const store = config.stores[index];
     const confirm = await question(`Are you sure you want to delete ${store.name}? (y/n): `);
     if (confirm.toLowerCase() === 'y') {
         config.stores.splice(index, 1);
         await saveConfig(config);
-        console.log('Store deleted successfully!');
+        console.log(`Store "${store.name}" deleted successfully.`);
+    } else {
+        console.log('Deletion cancelled.');
     }
 }
 
-async function deleteSearch(config) {
-    await listSearches(config);
-    if (config.searches.length === 0) return;
-
-    const index = parseInt(await question('\nEnter search number to delete (0 to cancel): ')) - 1;
-    if (index < 0 || index >= config.searches.length) {
-        console.log('Invalid search number.');
-        return;
-    }
-
+async function deleteSearch(index) {
+    const config = await loadConfig();
     const search = config.searches[index];
     const confirm = await question(`Are you sure you want to delete ${search.name}? (y/n): `);
     if (confirm.toLowerCase() === 'y') {
         config.searches.splice(index, 1);
         await saveConfig(config);
-        console.log('Search deleted successfully!');
+        console.log(`Search "${search.name}" deleted successfully.`);
+    } else {
+        console.log('Deletion cancelled.');
     }
 }
 
-async function toggleStoreStatus(config) {
-    await listStores(config);
-    if (config.stores.length === 0) return;
-
-    const index = parseInt(await question('\nEnter store number to toggle (0 to cancel): ')) - 1;
-    if (index < 0 || index >= config.stores.length) {
-        console.log('Invalid store number.');
-        return;
-    }
-
-    config.stores[index].enabled = !config.stores[index].enabled;
+async function toggleStoreStatus(index) {
+    const config = await loadConfig();
+    const store = config.stores[index];
+    store.enabled = !store.enabled;
     await saveConfig(config);
-    console.log(`Store ${config.stores[index].name} is now ${config.stores[index].enabled ? 'enabled' : 'disabled'}`);
+    console.log(`Store "${store.name}" ${store.enabled ? 'enabled' : 'disabled'}.`);
 }
 
-async function toggleSearchStatus(config) {
-    await listSearches(config);
-    if (config.searches.length === 0) return;
-
-    const index = parseInt(await question('\nEnter search number to toggle (0 to cancel): ')) - 1;
-    if (index < 0 || index >= config.searches.length) {
-        console.log('Invalid search number.');
-        return;
-    }
-
-    config.searches[index].enabled = !config.searches[index].enabled;
+async function toggleSearchStatus(index) {
+    const config = await loadConfig();
+    const search = config.searches[index];
+    search.enabled = !search.enabled;
     await saveConfig(config);
-    console.log(`Search ${config.searches[index].name} is now ${config.searches[index].enabled ? 'enabled' : 'disabled'}`);
+    console.log(`Search "${search.name}" ${search.enabled ? 'enabled' : 'disabled'}.`);
 }
 
-async function updateInterval(config) {
-    console.log('\n=== Update Check Interval ===');
-    console.log('1. Update store interval');
-    console.log('2. Update search interval');
-    const choice = await question('Enter your choice (1-2): ');
-
-    if (choice === '1') {
-        await listStores(config);
-        if (config.stores.length === 0) return;
-
-        const index = parseInt(await question('\nEnter store number to update (0 to cancel): ')) - 1;
-        if (index < 0 || index >= config.stores.length) {
-            console.log('Invalid store number.');
-            return;
-        }
-
-        const interval = parseInt(await question('Enter new interval (minutes): '));
-        config.stores[index].interval = interval;
-        await saveConfig(config);
-        console.log('Store interval updated successfully!');
-    } else if (choice === '2') {
-        await listSearches(config);
-        if (config.searches.length === 0) return;
-
-        const index = parseInt(await question('\nEnter search number to update (0 to cancel): ')) - 1;
-        if (index < 0 || index >= config.searches.length) {
-            console.log('Invalid search number.');
-            return;
-        }
-
-        const interval = parseInt(await question('Enter new interval (minutes): '));
-        config.searches[index].interval = interval;
-        await saveConfig(config);
-        console.log('Search interval updated successfully!');
-    }
-}
-
-async function updateWebhook(config) {
-    console.log('\n=== Update Webhook Assignment ===');
-    console.log('1. Update store webhook');
-    console.log('2. Update search webhook');
-    const choice = await question('Enter your choice (1-2): ');
-
-    if (choice === '1') {
-        await listStores(config);
-        if (config.stores.length === 0) return;
-
-        const index = parseInt(await question('\nEnter store number to update (0 to cancel): ')) - 1;
-        if (index < 0 || index >= config.stores.length) {
-            console.log('Invalid store number.');
-            return;
-        }
-
-        await listWebhooks(config);
-        const useCustom = (await question('Use custom webhook? (y/n): ')).toLowerCase() === 'y';
-        if (useCustom) {
-            const webhookIndex = parseInt(await question('Enter webhook number: ')) - 1;
-            if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
-                config.stores[index].webhook = config.webhooks[webhookIndex].name;
-                await saveConfig(config);
-                console.log('Store webhook updated successfully!');
-            }
-        }
-    } else if (choice === '2') {
-        await listSearches(config);
-        if (config.searches.length === 0) return;
-
-        const index = parseInt(await question('\nEnter search number to update (0 to cancel): ')) - 1;
-        if (index < 0 || index >= config.searches.length) {
-            console.log('Invalid search number.');
-            return;
-        }
-
-        await listWebhooks(config);
-        const useCustom = (await question('Use custom webhook? (y/n): ')).toLowerCase() === 'y';
-        if (useCustom) {
-            const webhookIndex = parseInt(await question('Enter webhook number: ')) - 1;
-            if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
-                config.searches[index].webhook = config.webhooks[webhookIndex].name;
-                await saveConfig(config);
-                console.log('Search webhook updated successfully!');
-            }
-        }
-    }
-}
-
-async function editWebhook(config) {
-    await listWebhooks(config);
-    if (config.webhooks.length === 0) return;
-
-    const index = parseInt(await question('\nEnter webhook number to edit (0 to cancel): ')) - 1;
-    if (index < 0 || index >= config.webhooks.length) {
-        console.log('Invalid webhook number.');
-        return;
-    }
-
-    const webhook = config.webhooks[index];
-    console.log(`Current URL: ${webhook.url}`);
+async function updateInterval(index, type) {
+    const config = await loadConfig();
+    const item = type === 'store' ? config.stores[index] : config.searches[index];
+    const currentInterval = item.interval;
     
-    const newUrl = await question('Enter new webhook URL (press Enter to keep current): ');
-    if (newUrl.trim()) {
-        webhook.url = newUrl.trim();
-        await saveConfig(config);
-        console.log('Webhook URL updated successfully!');
+    console.log(`\n=== Update ${type === 'store' ? 'Store' : 'Search'} Interval ===`);
+    console.log(`Current interval: ${currentInterval} minutes`);
+    
+    const newInterval = parseInt(await question('Enter new interval in minutes: '));
+    if (isNaN(newInterval) || newInterval < 1) {
+        console.log('Invalid interval. Must be a positive number.');
+        return;
     }
+    
+    item.interval = newInterval;
+    await saveConfig(config);
+    console.log(`Interval updated to ${newInterval} minutes.`);
 }
 
-async function addWebhook(config) {
+async function updateWebhookAssignment(index, type) {
+    const config = await loadConfig();
+    const item = type === 'store' ? config.stores[index] : config.searches[index];
+    
+    console.log(`\n=== Update ${type === 'store' ? 'Store' : 'Search'} Webhook ===`);
+    console.log('Available webhooks:');
+    config.webhooks.forEach((webhook, i) => {
+        console.log(`${i + 1}. ${webhook.name}`);
+    });
+    
+    const webhookIndex = parseInt(await question('Select webhook number (press Enter for default): ')) - 1;
+    if (webhookIndex < -1 || webhookIndex >= config.webhooks.length) {
+        console.log('Invalid webhook selection.');
+        return;
+    }
+    
+    if (webhookIndex === -1) {
+        item.webhookId = null;
+    } else {
+        item.webhookId = config.webhooks[webhookIndex].id;
+    }
+    
+    await saveConfig(config);
+    console.log('Webhook assignment updated successfully.');
+}
+
+async function editWebhook(index) {
+    const config = await loadConfig();
+    const webhook = config.webhooks[index];
+    console.log('\n=== Edit Webhook ===');
+    console.log(`Current Name: ${webhook.name}`);
+    console.log(`Current URL: ${webhook.url}`);
+
+    const newName = await question('Enter new name (or press Enter to keep current): ');
+    const newUrl = await question('Enter new URL (or press Enter to keep current): ');
+
+    if (newName) {
+        if (config.webhooks.some(w => w.name === newName && w.id !== webhook.id)) {
+            console.log('A webhook with this name already exists.');
+            return;
+        }
+        webhook.name = newName;
+    }
+
+    if (newUrl) {
+        try {
+            new URL(newUrl);
+            webhook.url = newUrl;
+        } catch (e) {
+            console.log('Invalid URL format. Changes not saved.');
+            return;
+        }
+    }
+
+    await saveConfig(config);
+    console.log('Webhook updated successfully.');
+}
+
+async function addWebhook() {
+    const config = await loadConfig();
     console.log('\n=== Add New Webhook ===');
     
     const name = await question('Enter webhook name: ');
@@ -441,7 +389,8 @@ async function addWebhook(config) {
     // Add new webhook
     config.webhooks.push({
         name,
-        url
+        url,
+        id: uuidv4()
     });
 
     // Save configuration
@@ -449,22 +398,8 @@ async function addWebhook(config) {
     console.log(`Webhook "${name}" added successfully.`);
 }
 
-async function deleteWebhook(config) {
-    console.log('\n=== Delete Webhook ===');
-    
-    // Show current webhooks
-    console.log('\nCurrent webhooks:');
-    config.webhooks.forEach((webhook, index) => {
-        console.log(`${index + 1}. ${webhook.name}`);
-    });
-
-    const index = parseInt(await question('\nEnter the number of the webhook to delete: ')) - 1;
-    
-    if (isNaN(index) || index < 0 || index >= config.webhooks.length) {
-        console.log('Invalid selection.');
-        return;
-    }
-
+async function deleteWebhook(index) {
+    const config = await loadConfig();
     const webhook = config.webhooks[index];
     const confirm = await question(`Are you sure you want to delete webhook "${webhook.name}"? (y/n): `);
     
@@ -477,89 +412,378 @@ async function deleteWebhook(config) {
     }
 }
 
-async function showMenu() {
+async function setDefaultWebhook(index) {
     const config = await loadConfig();
+    const webhook = config.webhooks[index];
     
+    // Remove default status from all webhooks
+    config.webhooks.forEach(w => w.isDefault = false);
+    
+    // Set the selected webhook as default
+    webhook.isDefault = true;
+    
+    await saveConfig(config);
+    console.log(`Webhook "${webhook.name}" set as default.`);
+}
+
+async function editStore(index) {
+    const config = await loadConfig();
+    const store = config.stores[index];
+    console.log('\n=== Edit Store ===');
+    console.log(`Current Name: ${store.name}`);
+    console.log(`Current URL: ${store.url}`);
+    console.log(`Current Interval: ${store.interval} minutes`);
+
+    const newName = await question('Enter new name (or press Enter to keep current): ');
+    const newUrl = await question('Enter new URL (or press Enter to keep current): ');
+    const newInterval = await question('Enter new interval in minutes (or press Enter to keep current): ');
+
+    if (newName) store.name = newName;
+    if (newUrl) store.url = newUrl;
+    if (newInterval) {
+        const interval = parseInt(newInterval);
+        if (!isNaN(interval) && interval > 0) {
+            store.interval = interval;
+        }
+    }
+
+    await saveConfig(config);
+    console.log('Store updated successfully.');
+}
+
+async function editSearch(index) {
+    const config = await loadConfig();
+    const search = config.searches[index];
+    console.log('\n=== Edit Search ===');
+    console.log(`Current Name: ${search.name}`);
+    console.log(`Current URL: ${search.url}`);
+    console.log(`Current Interval: ${search.interval} minutes`);
+
+    const newName = await question('Enter new name (or press Enter to keep current): ');
+    const newUrl = await question('Enter new URL (or press Enter to keep current): ');
+    const newInterval = await question('Enter new interval in minutes (or press Enter to keep current): ');
+
+    if (newName) search.name = newName;
+    if (newUrl) search.url = newUrl;
+    if (newInterval) {
+        const interval = parseInt(newInterval);
+        if (!isNaN(interval) && interval > 0) {
+            search.interval = interval;
+        }
+    }
+
+    await saveConfig(config);
+    console.log('Search updated successfully.');
+}
+
+// Add new view mode functions
+async function showWebhookView() {
+    const config = await loadConfig();
+    console.clear();
+    console.log('==========================================');
+    console.log('=== Webhooks ===');
+    config.webhooks.forEach((webhook, index) => {
+        console.log(`${index + 1}. ${webhook.name}`);
+        console.log(`   URL: ${webhook.url}`);
+        console.log(`   Status: ${webhook.isDefault ? 'Default' : 'Active'}`);
+        console.log('');
+    });
+    console.log('==========================================');
+    console.log('\nOptions:');
+    console.log('- Press Enter to return to main menu');
+    console.log('- Press number to select webhook');
+    console.log('- Press A to add new webhook');
+    
+    const input = await question('\nEnter your choice: ');
+    if (input === '') {
+        return showMenu();
+    } else if (input.toLowerCase() === 'a') {
+        await addWebhook();
+        return showWebhookView();
+    } else {
+        const index = parseInt(input) - 1;
+        if (index >= 0 && index < config.webhooks.length) {
+            await showWebhookActions(index);
+        }
+        return showWebhookView();
+    }
+}
+
+async function showWebhookActions(index) {
+    const config = await loadConfig();
+    console.clear();
+    const webhook = config.webhooks[index];
+    console.log('==========================================');
+    console.log(`=== Webhook: ${webhook.name} ===`);
+    console.log(`URL: ${webhook.url}`);
+    console.log(`Status: ${webhook.isDefault ? 'Default' : 'Active'}`);
+    console.log('==========================================');
+    console.log('\nOptions:');
+    console.log('- Press E to edit webhook');
+    console.log('- Press D to delete webhook');
+    console.log('- Press S to set as default');
+    console.log('- Press B to go back');
+    
+    const input = await question('\nEnter your choice: ');
+    switch(input.toLowerCase()) {
+        case 'e':
+            await editWebhook(index);
+            break;
+        case 'd':
+            await deleteWebhook(index);
+            break;
+        case 's':
+            await setDefaultWebhook(index);
+            break;
+        case 'b':
+            return;
+    }
+}
+
+async function showDataManagementView() {
+    console.clear();
+    console.log('==========================================');
+    console.log('=== Data Management ===');
+    console.log('1. View Daily Statistics');
+    console.log('2. View Monthly Statistics');
+    console.log('3. View Total Usage');
+    console.log('4. Clear Old Statistics');
+    console.log('==========================================');
+    console.log('\nOptions:');
+    console.log('- Press number to select option');
+    console.log('- Press B to go back to main menu');
+    
+    const input = await question('\nEnter your choice: ');
+    if (input.toLowerCase() === 'b') {
+        return showMenu();
+    }
+    
+    switch(input) {
+        case '1':
+            await showDailyStats();
+            break;
+        case '2':
+            await showMonthlyStats();
+            break;
+        case '3':
+            await showTotalStats();
+            break;
+        case '4':
+            await clearOldStats();
+            break;
+    }
+    return showDataManagementView();
+}
+
+async function showDailyStats() {
+    console.clear();
+    console.log('==========================================');
+    console.log('=== Daily Statistics ===');
+    const today = new Date().toISOString().split('T')[0];
+    const stats = usageStats.getDailyStats(today);
+    console.log(`Date: ${today}`);
+    console.log(`Total Bytes: ${(stats.total_bytes / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`Total Requests: ${stats.total_requests}`);
+    console.log(`Total Items: ${stats.total_items}`);
+    console.log('==========================================');
+    await question('\nPress Enter to continue...');
+}
+
+async function showMonthlyStats() {
+    console.clear();
+    console.log('==========================================');
+    console.log('=== Monthly Statistics ===');
+    const month = new Date().toISOString().substring(0, 7);
+    const stats = usageStats.getMonthlyStats(month);
+    console.log(`Month: ${month}`);
+    console.log(`Total Bytes: ${(stats.total_bytes / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`Total Requests: ${stats.total_requests}`);
+    console.log(`Total Items: ${stats.total_items}`);
+    console.log('==========================================');
+    await question('\nPress Enter to continue...');
+}
+
+async function showTotalStats() {
+    console.clear();
+    console.log('==========================================');
+    console.log('=== Total Usage Statistics ===');
+    const stats = usageStats.getTotalStats();
+    console.log(`Total Bytes: ${(stats.total_bytes / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`Total Requests: ${stats.total_requests}`);
+    console.log(`Total Items: ${stats.total_items}`);
+    console.log('==========================================');
+    await question('\nPress Enter to continue...');
+}
+
+async function clearOldStats() {
+    console.clear();
+    console.log('==========================================');
+    console.log('=== Clear Old Statistics ===');
+    const days = await question('Enter number of days to keep (default: 30): ');
+    const daysToKeep = parseInt(days) || 30;
+    usageStats.clearOldStats(daysToKeep);
+    console.log(`Cleared statistics older than ${daysToKeep} days`);
+    console.log('==========================================');
+    await question('\nPress Enter to continue...');
+}
+
+// Modify showMenu to include new view mode system
+async function showMenu() {
     while (true) {
-        console.log('\n' + colors.fg.cyan + `${getTimestamp()} === eBay Scanner Configuration Manager ===` + colors.reset);
-        console.log(colors.fg.yellow + 'Webhook Management:' + colors.reset);
-        console.log('1. List all webhooks');
-        console.log('2. Add new webhook');
-        console.log('3. Edit webhook URL');
-        console.log('4. Delete webhook');
-        console.log('5. Set default webhook');
-        console.log('6. Update webhook assignment');
+        console.log('\n=== eBay Scanner Configuration ===');
+        console.log('1. Webhook Management');
+        console.log('2. Store Management');
+        console.log('3. Search Management');
+        console.log('4. Data Management');
+        console.log('5. Exit');
         
-        console.log('\n' + colors.fg.yellow + 'Store Management:' + colors.reset);
-        console.log('7. List all stores');
-        console.log('8. Add new store');
-        console.log('9. Delete store');
-        console.log('10. Toggle store status');
+        const choice = await question('\nEnter your choice (1-5): ');
         
-        console.log('\n' + colors.fg.yellow + 'Search Management:' + colors.reset);
-        console.log('11. List all searches');
-        console.log('12. Add new search');
-        console.log('13. Delete search');
-        console.log('14. Toggle search status');
-        console.log('15. Update check interval');
-        
-        console.log('\n' + colors.fg.yellow + 'Other:' + colors.reset);
-        console.log('0. Exit');
-
-        const choice = await question('\nEnter your choice (0-15): ');
-
         switch (choice) {
-            case '0':
-                console.log('Exiting...');
-                return;
             case '1':
-                await listWebhooks(config);
+                await showWebhookView();
                 break;
             case '2':
-                await addWebhook(config);
+                await showStoreView();
                 break;
             case '3':
-                await editWebhook(config);
+                await showSearchView();
                 break;
             case '4':
-                await deleteWebhook(config);
+                await showDataManagementView();
                 break;
             case '5':
-                await setDefaultWebhook(config);
-                break;
-            case '6':
-                await updateWebhook(config);
-                break;
-            case '7':
-                await listStores(config);
-                break;
-            case '8':
-                await addStore(config);
-                break;
-            case '9':
-                await deleteStore(config);
-                break;
-            case '10':
-                await toggleStoreStatus(config);
-                break;
-            case '11':
-                await listSearches(config);
-                break;
-            case '12':
-                await addSearch(config);
-                break;
-            case '13':
-                await deleteSearch(config);
-                break;
-            case '14':
-                await toggleSearchStatus(config);
-                break;
-            case '15':
-                await updateInterval(config);
-                break;
+                console.log('Exiting configuration...');
+                return;
             default:
-                console.log('Invalid choice, please try again.');
+                console.log('Invalid choice. Please enter a number between 1 and 5.');
         }
+    }
+}
+
+async function showStoreView() {
+    const config = await loadConfig();
+    console.clear();
+    console.log('==========================================');
+    console.log('=== Stores ===');
+    config.stores.forEach((store, index) => {
+        console.log(`${index + 1}. ${store.name}`);
+        console.log(`   URL: ${store.url}`);
+        console.log(`   Status: ${store.enabled ? 'Enabled' : 'Disabled'}`);
+        console.log('');
+    });
+    console.log('==========================================');
+    console.log('\nOptions:');
+    console.log('- Press Enter to return to main menu');
+    console.log('- Press number to select store');
+    console.log('- Press A to add new store');
+    
+    const input = await question('\nEnter your choice: ');
+    if (input === '') {
+        return showMenu();
+    } else if (input.toLowerCase() === 'a') {
+        await addStore();
+        return showStoreView();
+    } else {
+        const index = parseInt(input) - 1;
+        if (index >= 0 && index < config.stores.length) {
+            await showStoreActions(index);
+        }
+        return showStoreView();
+    }
+}
+
+async function showSearchView() {
+    const config = await loadConfig();
+    console.clear();
+    console.log('==========================================');
+    console.log('=== Searches ===');
+    config.searches.forEach((search, index) => {
+        console.log(`${index + 1}. ${search.name}`);
+        console.log(`   URL: ${search.url}`);
+        console.log(`   Status: ${search.enabled ? 'Enabled' : 'Disabled'}`);
+        console.log('');
+    });
+    console.log('==========================================');
+    console.log('\nOptions:');
+    console.log('- Press Enter to return to main menu');
+    console.log('- Press number to select search');
+    console.log('- Press A to add new search');
+    
+    const input = await question('\nEnter your choice: ');
+    if (input === '') {
+        return showMenu();
+    } else if (input.toLowerCase() === 'a') {
+        await addSearch();
+        return showSearchView();
+    } else {
+        const index = parseInt(input) - 1;
+        if (index >= 0 && index < config.searches.length) {
+            await showSearchActions(index);
+        }
+        return showSearchView();
+    }
+}
+
+async function showStoreActions(index) {
+    const config = await loadConfig();
+    console.clear();
+    const store = config.stores[index];
+    console.log('==========================================');
+    console.log(`=== Store: ${store.name} ===`);
+    console.log(`URL: ${store.url}`);
+    console.log(`Status: ${store.enabled ? 'Enabled' : 'Disabled'}`);
+    console.log('==========================================');
+    console.log('\nOptions:');
+    console.log('- Press E to edit store');
+    console.log('- Press D to delete store');
+    console.log('- Press T to toggle status');
+    console.log('- Press B to go back');
+    
+    const input = await question('\nEnter your choice: ');
+    switch(input.toLowerCase()) {
+        case 'e':
+            await editStore(index);
+            break;
+        case 'd':
+            await deleteStore(index);
+            break;
+        case 't':
+            await toggleStoreStatus(index);
+            break;
+        case 'b':
+            return;
+    }
+}
+
+async function showSearchActions(index) {
+    const config = await loadConfig();
+    console.clear();
+    const search = config.searches[index];
+    console.log('==========================================');
+    console.log(`=== Search: ${search.name} ===`);
+    console.log(`URL: ${search.url}`);
+    console.log(`Status: ${search.enabled ? 'Enabled' : 'Disabled'}`);
+    console.log('==========================================');
+    console.log('\nOptions:');
+    console.log('- Press E to edit search');
+    console.log('- Press D to delete search');
+    console.log('- Press T to toggle status');
+    console.log('- Press B to go back');
+    
+    const input = await question('\nEnter your choice: ');
+    switch(input.toLowerCase()) {
+        case 'e':
+            await editSearch(index);
+            break;
+        case 'd':
+            await deleteSearch(index);
+            break;
+        case 't':
+            await toggleSearchStatus(index);
+            break;
+        case 'b':
+            return;
     }
 }
 

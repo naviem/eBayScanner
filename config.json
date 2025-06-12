@@ -1,5 +1,28 @@
 {
-    "stores": [],
-    "searches": [],
-    "webhooks": []
+    "stores": [
+        {
+            "name": "Surplus",
+            "url": "https://www.ebay.ca/str/surplusbydesign",
+            "storeId": "surplusbydesign",
+            "interval": 5,
+            "enabled": true,
+            "webhook": "Amazon Channel 2"
+        }
+    ],
+    "searches": [
+        {
+            "name": "iPhone 13 Mini",
+            "url": "https://www.ebay.ca/sch/i.html?_nkw=iphone+13+mini&_sacat=0&_from=R40&_sop=10",
+            "interval": 5,
+            "enabled": true,
+            "webhook": "Amazon Channel 2"
+        }
+    ],
+    "webhooks": [
+        {
+            "name": "Amazon Channel 2",
+            "url": "https://discord.com/api/webhooks/1000204574512123966/fka-4eEoa2X4nzkneTEJwO-tnaKxuG6rBd4HXfGctbwxUDWfLJUvF7gyQGwUcwp2AYEA",
+            "default": false
+        }
+    ]
 }

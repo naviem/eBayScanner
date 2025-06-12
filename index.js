@@ -5,6 +5,7 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 const ItemCache = require('./item-cache');
+const usageStats = require('./usage-stats');
 
 // Initialize eBay API configuration if credentials are available
 const hasEbayCredentials = process.env.EBAY_APP_ID && process.env.EBAY_CERT_ID && process.env.EBAY_DEV_ID;
@@ -63,6 +64,10 @@ async function loadConfig() {
 async function checkEbayStore(store) {
     try {
         console.log(`${getTimestamp()} Checking store: ${store.name}`);
+        const startTime = Date.now();
+        let bytesReceived = 0;
+        let requestCount = 0;
+        let itemsProcessed = 0;
         const storeId = store.url.split('/str/')[1].split('/')[0];
         const url = `https://www.ebay.ca/sch/i.html?_nkw=&_sacat=0&_sop=10&_dmd=2&_ipg=200&_ssn=${storeId}`;
         console.log(`${getTimestamp()} Fetching store items from: ${url}`);
@@ -133,6 +138,13 @@ async function checkEbayStore(store) {
             console.log(`${getTimestamp()} Note: ${newItems - 2} additional new items found but not notified to prevent spam`);
         }
 
+        // After successful store check, record stats
+        bytesReceived = response.data.length;
+        requestCount = 1;
+        itemsProcessed = items.length;
+
+        usageStats.recordScan(bytesReceived, requestCount, itemsProcessed);
+
     } catch (error) {
         console.error(`${getTimestamp()} Error checking store ${store.name}:`, error.message);
     }
@@ -141,6 +153,10 @@ async function checkEbayStore(store) {
 async function checkEbaySearch(search) {
     try {
         console.log(`${getTimestamp()} Checking search: ${search.name}`);
+        const startTime = Date.now();
+        let bytesReceived = 0;
+        let requestCount = 0;
+        let itemsProcessed = 0;
         
         // Parse the search URL to extract parameters
         const searchUrl = new URL(search.url);
@@ -229,6 +245,13 @@ async function checkEbaySearch(search) {
         if (isFirstRun && newItems > 2) {
             console.log(`${getTimestamp()} Note: ${newItems - 2} additional new items found but not notified to prevent spam`);
         }
+
+        // After successful search check, record stats
+        bytesReceived = response.data.length;
+        requestCount = 1;
+        itemsProcessed = items.length;
+
+        usageStats.recordScan(bytesReceived, requestCount, itemsProcessed);
 
     } catch (error) {
         console.error(`${getTimestamp()} Error checking search ${search.name}:`, error.message);
