@@ -1,0 +1,8 @@
+version: '3'
+services:
+  ebay-scanner:
+    build: .
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DOCKER=true 

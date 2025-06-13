@@ -3,6 +3,11 @@ const path = require('path');
 const readline = require('readline');
 const { v4: uuidv4 } = require('uuid');
 const usageStats = require('./usage-stats');
+const axios = require('axios');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+require('dotenv').config();
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -49,38 +54,44 @@ function getTimestamp() {
     return `[${now.toLocaleTimeString()}]`;
 }
 
-function showSuccess(message) {
-    console.log(colors.fg.green + `${getTimestamp()} ${message}` + colors.reset);
-}
-
-function showError(message) {
-    console.log(colors.fg.red + `${getTimestamp()} ${message}` + colors.reset);
-}
-
-function showInfo(message) {
-    console.log(colors.fg.cyan + `${getTimestamp()} ${message}` + colors.reset);
-}
+// Consolidate show functions into a single utility
+const show = {
+    success: (message) => console.log(colors.fg.green + `${getTimestamp()} ${message}` + colors.reset),
+    error: (message) => console.log(colors.fg.red + `${getTimestamp()} ${message}` + colors.reset),
+    info: (message) => console.log(colors.fg.cyan + `${getTimestamp()} ${message}` + colors.reset)
+};
 
 async function loadConfig() {
     try {
         const configPath = path.join(__dirname, 'config.json');
-        const configData = await fs.readFile(configPath, 'utf8');
-        const config = JSON.parse(configData);
         
-        // Ensure all required arrays exist
-        if (!config.webhooks) config.webhooks = [];
-        if (!config.stores) config.stores = [];
-        if (!config.searches) config.searches = [];
-        
-        return config;
+        try {
+            // Try to read the file
+            const data = await fs.readFile(configPath, 'utf8');
+            return JSON.parse(data);
     } catch (error) {
-        console.error('Error loading config:', error.message);
-        // Return a properly initialized config object
-        return {
-            webhooks: [],
+            if (error.code === 'ENOENT') {
+                // File doesn't exist, create default config
+                const defaultConfig = {
             stores: [],
-            searches: []
-        };
+                    searches: [],
+                    webhooks: [],
+                    settings: {
+                        defaultInterval: 5,
+                        defaultWebhook: null
+                    }
+                };
+                
+                // Save default config
+                await fs.writeFile(configPath, JSON.stringify(defaultConfig, null, 2));
+                show.success('Created new config.json with default settings');
+                return defaultConfig;
+            }
+            throw error; // Re-throw if it's not a "file not found" error
+        }
+    } catch (error) {
+        show.error(`Error loading config.json: ${error.message}`);
+        process.exit(1);
     }
 }
 
@@ -88,7 +99,7 @@ async function saveConfig(config) {
     try {
         const configPath = path.join(__dirname, 'config.json');
         await fs.writeFile(configPath, JSON.stringify(config, null, 4));
-        showSuccess('Configuration saved successfully!');
+        show.success('Configuration saved successfully!');
     } catch (error) {
         console.error('Error saving config:', error.message);
     }
@@ -97,7 +108,7 @@ async function saveConfig(config) {
 async function listWebhooks(config) {
     console.log('\n' + colors.fg.yellow + `${getTimestamp()} === Webhooks ===` + colors.reset);
     if (config.webhooks.length === 0) {
-        showInfo('No webhooks configured');
+        show.info('No webhooks configured');
         return;
     }
     
@@ -118,10 +129,18 @@ async function listStores(config) {
         return;
     }
     config.stores.forEach((store, index) => {
-        console.log(`${index + 1}. ${store.name} (${store.id})`);
+        console.log(`${index + 1}. ${store.name || '(no name)'}${store.type ? ' [' + store.type + ']' : ''}`);
+        if (store.url) {
+            console.log(`   URL: ${store.url}`);
+        }
+        if (store.storeId) {
+            console.log(`   Store ID: ${store.storeId}`);
+        }
         console.log(`   Status: ${store.enabled ? 'Enabled' : 'Disabled'}`);
-        console.log(`   Interval: ${store.interval} minutes`);
-        console.log(`   Webhook: ${store.webhook || 'Default'}`);
+        console.log(`   Interval: ${store.interval || '(default)'} minutes`);
+        if (store.webhook || store.webhookId) {
+            console.log(`   Webhook: ${store.webhook || store.webhookId}`);
+        }
         console.log('---');
     });
 }
@@ -133,11 +152,24 @@ async function listSearches(config) {
         return;
     }
     config.searches.forEach((search, index) => {
-        console.log(`${index + 1}. ${search.name}`);
-        console.log(`   URL: ${search.url}`);
+        console.log(`${index + 1}. ${search.name || '(no name)'}${search.type ? ' [' + search.type + ']' : ''}`);
+        if (search.url) {
+            console.log(`   URL: ${search.url}`);
+        }
+        if (search.searchTerm) {
+            console.log(`   Search Term: ${search.searchTerm}`);
+        }
+        if (search.categoryId) {
+            console.log(`   Category ID: ${search.categoryId}`);
+        }
+        if (search.categoryPath) {
+            console.log(`   Category Path: ${search.categoryPath}`);
+        }
         console.log(`   Status: ${search.enabled ? 'Enabled' : 'Disabled'}`);
-        console.log(`   Interval: ${search.interval} minutes`);
-        console.log(`   Webhook: ${search.webhook || 'Default'}`);
+        console.log(`   Interval: ${search.interval || '(default)'} minutes`);
+        if (search.webhook || search.webhookId) {
+            console.log(`   Webhook: ${search.webhook || search.webhookId}`);
+        }
         console.log('---');
     });
 }
@@ -155,6 +187,7 @@ function extractStoreId(url) {
 }
 
 async function addStore() {
+    console.clear();
     const config = await loadConfig();
     console.log('\n=== Add New Store ===');
     
@@ -204,6 +237,7 @@ async function addStore() {
 }
 
 async function addSearch() {
+    console.clear();
     const config = await loadConfig();
     console.log('\n=== Add New Search ===');
     const name = await question('Enter search name: ');
@@ -237,29 +271,43 @@ async function addSearch() {
     console.log('Search added successfully!');
 }
 
-async function deleteStore(index) {
+async function deleteSearch() {
+    console.clear();
     const config = await loadConfig();
-    const store = config.stores[index];
-    const confirm = await question(`Are you sure you want to delete ${store.name}? (y/n): `);
-    if (confirm.toLowerCase() === 'y') {
-        config.stores.splice(index, 1);
-        await saveConfig(config);
-        console.log(`Store "${store.name}" deleted successfully.`);
-    } else {
-        console.log('Deletion cancelled.');
+    console.log('\n=== Delete Search ===');
+    
+    if (config.searches.length === 0) {
+        show.error('No searches configured');
+        return;
     }
-}
 
-async function deleteSearch(index) {
-    const config = await loadConfig();
-    const search = config.searches[index];
-    const confirm = await question(`Are you sure you want to delete ${search.name}? (y/n): `);
+    // Show all searches
+    console.log('\nConfigured searches:');
+    config.searches.forEach((search, index) => {
+        console.log(`${index + 1}. ${search.name} (${search.type})`);
+        console.log(`   Term: ${search.searchTerm}`);
+        console.log(`   Interval: ${search.interval} minutes`);
+        console.log(`   Status: ${search.enabled ? 'Enabled' : 'Disabled'}`);
+        console.log(''); // Add blank line between searches
+    });
+    
+    const searchNumber = await question('Enter search number to delete: ');
+    const searchIndex = parseInt(searchNumber) - 1;
+    
+    if (isNaN(searchIndex) || searchIndex < 0 || searchIndex >= config.searches.length) {
+        show.error('Invalid search number');
+        return;
+    }
+
+    const search = config.searches[searchIndex];
+    const confirm = await question(`Are you sure you want to delete "${search.name}"? (y/n): `);
+    
     if (confirm.toLowerCase() === 'y') {
-        config.searches.splice(index, 1);
+        config.searches.splice(searchIndex, 1);
         await saveConfig(config);
-        console.log(`Search "${search.name}" deleted successfully.`);
+        show.success('Search deleted successfully');
     } else {
-        console.log('Deletion cancelled.');
+        show.info('Deletion cancelled');
     }
 }
 
@@ -271,60 +319,139 @@ async function toggleStoreStatus(index) {
     console.log(`Store "${store.name}" ${store.enabled ? 'enabled' : 'disabled'}.`);
 }
 
-async function toggleSearchStatus(index) {
+async function toggleSearchStatus() {
+    console.clear();
     const config = await loadConfig();
-    const search = config.searches[index];
-    search.enabled = !search.enabled;
-    await saveConfig(config);
-    console.log(`Search "${search.name}" ${search.enabled ? 'enabled' : 'disabled'}.`);
-}
-
-async function updateInterval(index, type) {
-    const config = await loadConfig();
-    const item = type === 'store' ? config.stores[index] : config.searches[index];
-    const currentInterval = item.interval;
+    console.log('\n=== Toggle Search Status ===');
     
-    console.log(`\n=== Update ${type === 'store' ? 'Store' : 'Search'} Interval ===`);
-    console.log(`Current interval: ${currentInterval} minutes`);
-    
-    const newInterval = parseInt(await question('Enter new interval in minutes: '));
-    if (isNaN(newInterval) || newInterval < 1) {
-        console.log('Invalid interval. Must be a positive number.');
+    if (config.searches.length === 0) {
+        show.error('No searches configured');
         return;
     }
-    
-    item.interval = newInterval;
-    await saveConfig(config);
-    console.log(`Interval updated to ${newInterval} minutes.`);
-}
 
-async function updateWebhookAssignment(index, type) {
-    const config = await loadConfig();
-    const item = type === 'store' ? config.stores[index] : config.searches[index];
-    
-    console.log(`\n=== Update ${type === 'store' ? 'Store' : 'Search'} Webhook ===`);
-    console.log('Available webhooks:');
-    config.webhooks.forEach((webhook, i) => {
-        console.log(`${i + 1}. ${webhook.name}`);
+    // Show all searches
+    console.log('\nConfigured searches:');
+    config.searches.forEach((search, index) => {
+        console.log(`${index + 1}. ${search.name} (${search.type})`);
+        console.log(`   Term: ${search.searchTerm}`);
+        console.log(`   Current Status: ${search.enabled ? 'Enabled' : 'Disabled'}`);
+        console.log(''); // Add blank line between searches
     });
     
-    const webhookIndex = parseInt(await question('Select webhook number (press Enter for default): ')) - 1;
-    if (webhookIndex < -1 || webhookIndex >= config.webhooks.length) {
-        console.log('Invalid webhook selection.');
+    const searchNumber = await question('Enter search number to toggle: ');
+    const searchIndex = parseInt(searchNumber) - 1;
+    
+    if (isNaN(searchIndex) || searchIndex < 0 || searchIndex >= config.searches.length) {
+        show.error('Invalid search number');
+        return;
+    }
+
+    const search = config.searches[searchIndex];
+    search.enabled = !search.enabled;
+    await saveConfig(config);
+    show.success(`Search "${search.name}" is now ${search.enabled ? 'enabled' : 'disabled'}`);
+}
+
+async function updateSearchInterval() {
+    console.clear();
+    const config = await loadConfig();
+    console.log('\n=== Update Check Interval ===');
+    
+    if (config.searches.length === 0) {
+        show.error('No searches configured');
+        return;
+    }
+
+    // Show all searches
+    console.log('\nConfigured searches:');
+    config.searches.forEach((search, index) => {
+        console.log(`${index + 1}. ${search.name} (${search.type})`);
+        console.log(`   Term: ${search.searchTerm}`);
+        console.log(`   Current Interval: ${search.interval} minutes`);
+        console.log(''); // Add blank line between searches
+    });
+    
+    const searchNumber = await question('Enter search number to update: ');
+    const searchIndex = parseInt(searchNumber) - 1;
+    
+    if (isNaN(searchIndex) || searchIndex < 0 || searchIndex >= config.searches.length) {
+        show.error('Invalid search number');
         return;
     }
     
-    if (webhookIndex === -1) {
-        item.webhookId = null;
+    const search = config.searches[searchIndex];
+    const newInterval = await question(`Enter new check interval in minutes (current: ${search.interval}): `);
+    
+    const interval = parseInt(newInterval);
+    if (!isNaN(interval) && interval > 0) {
+        search.interval = interval;
+    await saveConfig(config);
+        show.success(`Check interval updated to ${interval} minutes`);
     } else {
-        item.webhookId = config.webhooks[webhookIndex].id;
+        show.error('Invalid interval. No changes made.');
+    }
+}
+
+async function updateSearchWebhook() {
+    console.clear();
+    const config = await loadConfig();
+    console.log('\n=== Update Webhook Assignment ===');
+    
+    if (config.searches.length === 0) {
+        show.error('No searches configured');
+        return;
+    }
+
+    if (config.webhooks.length === 0) {
+        show.error('No webhooks configured');
+        return;
+    }
+
+    // Show all searches
+    console.log('\nConfigured searches:');
+    config.searches.forEach((search, index) => {
+        console.log(`${index + 1}. ${search.name} (${search.type})`);
+        console.log(`   Term: ${search.searchTerm}`);
+        console.log(`   Current Webhook: ${search.webhookId ? config.webhooks.find(w => w.id === search.webhookId)?.name || 'None' : 'None'}`);
+        console.log(''); // Add blank line between searches
+    });
+    
+    const searchNumber = await question('Enter search number to update: ');
+    const searchIndex = parseInt(searchNumber) - 1;
+    
+    if (isNaN(searchIndex) || searchIndex < 0 || searchIndex >= config.searches.length) {
+        show.error('Invalid search number');
+        return;
+    }
+    
+    const search = config.searches[searchIndex];
+    
+    // Show available webhooks
+    console.log('\nAvailable webhooks:');
+    config.webhooks.forEach((webhook, index) => {
+        console.log(`${index + 1}. ${webhook.name} (${webhook.url.substring(0, 30)}...)`);
+    });
+    console.log(`${config.webhooks.length + 1}. None (remove webhook)`);
+    
+    const webhookChoice = await question('Choose webhook number: ');
+    const webhookIndex = parseInt(webhookChoice) - 1;
+    
+    if (webhookIndex === config.webhooks.length) {
+        search.webhookId = null;
+        show.success('Webhook removed from search');
+    } else if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
+        search.webhookId = config.webhooks[webhookIndex].id;
+        show.success(`Webhook "${config.webhooks[webhookIndex].name}" assigned to search`);
+    } else {
+        show.error('Invalid webhook choice. No changes made.');
+        return;
     }
     
     await saveConfig(config);
-    console.log('Webhook assignment updated successfully.');
 }
 
 async function editWebhook(index) {
+    console.clear();
     const config = await loadConfig();
     const webhook = config.webhooks[index];
     console.log('\n=== Edit Webhook ===');
@@ -357,6 +484,7 @@ async function editWebhook(index) {
 }
 
 async function addWebhook() {
+    console.clear();
     const config = await loadConfig();
     console.log('\n=== Add New Webhook ===');
     
@@ -427,6 +555,7 @@ async function setDefaultWebhook(index) {
 }
 
 async function editStore(index) {
+    console.clear();
     const config = await loadConfig();
     const store = config.stores[index];
     console.log('\n=== Edit Store ===');
@@ -451,35 +580,60 @@ async function editStore(index) {
     console.log('Store updated successfully.');
 }
 
-async function editSearch(index) {
+async function editSearch() {
+    console.clear();
     const config = await loadConfig();
-    const search = config.searches[index];
     console.log('\n=== Edit Search ===');
-    console.log(`Current Name: ${search.name}`);
-    console.log(`Current URL: ${search.url}`);
-    console.log(`Current Interval: ${search.interval} minutes`);
+    
+    if (config.searches.length === 0) {
+        show.error('No searches configured');
+        return;
+    }
 
-    const newName = await question('Enter new name (or press Enter to keep current): ');
-    const newUrl = await question('Enter new URL (or press Enter to keep current): ');
-    const newInterval = await question('Enter new interval in minutes (or press Enter to keep current): ');
+    // Show all searches
+    console.log('\nConfigured searches:');
+    config.searches.forEach((search, index) => {
+        console.log(`${index + 1}. ${search.name} (${search.type})`);
+        console.log(`   Term: ${search.searchTerm}`);
+        console.log(`   Interval: ${search.interval} minutes`);
+        console.log(`   Status: ${search.enabled ? 'Enabled' : 'Disabled'}`);
+        console.log(''); // Add blank line between searches
+    });
+    
+    const searchNumber = await question('Enter search number to edit: ');
+    const searchIndex = parseInt(searchNumber) - 1;
+    
+    if (isNaN(searchIndex) || searchIndex < 0 || searchIndex >= config.searches.length) {
+        show.error('Invalid search number');
+        return;
+    }
+
+    const search = config.searches[searchIndex];
+    console.log(`\nEditing search: ${search.name}`);
+    
+    const newName = await question(`Enter new name (current: ${search.name}): `);
+    const newTerm = await question(`Enter new search term (current: ${search.searchTerm}): `);
+    const newInterval = await question(`Enter new check interval in minutes (current: ${search.interval}): `);
 
     if (newName) search.name = newName;
-    if (newUrl) search.url = newUrl;
+    if (newTerm) search.searchTerm = newTerm;
     if (newInterval) {
         const interval = parseInt(newInterval);
         if (!isNaN(interval) && interval > 0) {
             search.interval = interval;
+        } else {
+            show.error('Invalid interval. Keeping current value.');
         }
     }
 
     await saveConfig(config);
-    console.log('Search updated successfully.');
+    show.success('Search updated successfully');
 }
 
 // Add new view mode functions
 async function showWebhookView() {
-    const config = await loadConfig();
     console.clear();
+    const config = await loadConfig();
     console.log('==========================================');
     console.log('=== Webhooks ===');
     config.webhooks.forEach((webhook, index) => {
@@ -551,10 +705,10 @@ async function showDataManagementView() {
     console.log('==========================================');
     console.log('\nOptions:');
     console.log('- Press number to select option');
-    console.log('- Press B to go back to main menu');
+    console.log('- Press Enter to return to main menu');
     
     const input = await question('\nEnter your choice: ');
-    if (input.toLowerCase() === 'b') {
+    if (input === '') {
         return showMenu();
     }
     
@@ -629,15 +783,15 @@ async function clearOldStats() {
 
 // Modify showMenu to include new view mode system
 async function showMenu() {
-    while (true) {
-        console.log('\n=== eBay Scanner Configuration ===');
+    console.clear();
+    console.log('=== eBay Scanner Configuration Manager ===');
         console.log('1. Webhook Management');
         console.log('2. Store Management');
         console.log('3. Search Management');
         console.log('4. Data Management');
         console.log('5. Exit');
         
-        const choice = await question('\nEnter your choice (1-5): ');
+    const choice = await question('\nEnter your choice: ');
         
         switch (choice) {
             case '1':
@@ -658,12 +812,12 @@ async function showMenu() {
             default:
                 console.log('Invalid choice. Please enter a number between 1 and 5.');
         }
-    }
+    return showMenu();
 }
 
 async function showStoreView() {
-    const config = await loadConfig();
     console.clear();
+    const config = await loadConfig();
     console.log('==========================================');
     console.log('=== Stores ===');
     config.stores.forEach((store, index) => {
@@ -682,7 +836,7 @@ async function showStoreView() {
     if (input === '') {
         return showMenu();
     } else if (input.toLowerCase() === 'a') {
-        await addStore();
+        await configureStore();
         return showStoreView();
     } else {
         const index = parseInt(input) - 1;
@@ -694,34 +848,65 @@ async function showStoreView() {
 }
 
 async function showSearchView() {
-    const config = await loadConfig();
     console.clear();
-    console.log('==========================================');
-    console.log('=== Searches ===');
-    config.searches.forEach((search, index) => {
-        console.log(`${index + 1}. ${search.name}`);
-        console.log(`   URL: ${search.url}`);
-        console.log(`   Status: ${search.enabled ? 'Enabled' : 'Disabled'}`);
-        console.log('');
-    });
-    console.log('==========================================');
-    console.log('\nOptions:');
-    console.log('- Press Enter to return to main menu');
-    console.log('- Press number to select search');
-    console.log('- Press A to add new search');
-    
-    const input = await question('\nEnter your choice: ');
-    if (input === '') {
-        return showMenu();
-    } else if (input.toLowerCase() === 'a') {
-        await addSearch();
-        return showSearchView();
-    } else {
-        const index = parseInt(input) - 1;
-        if (index >= 0 && index < config.searches.length) {
-            await showSearchActions(index);
+    const config = await loadConfig();
+    while (true) {
+        console.log('\n=== Search Management ===');
+        console.log('1. List all searches');
+        console.log('2. Add new search (URL)');
+        
+        // Only show API option if credentials are available
+        const hasApiCredentials = process.env.EBAY_APP_ID && process.env.EBAY_CERT_ID;
+        if (hasApiCredentials) {
+            console.log('3. Add new search (API)');
+        } else {
+            console.log('3. Add new search (API) - Requires eBay API credentials');
         }
-        return showSearchView();
+        
+        console.log('4. Edit search');
+        console.log('5. Delete search');
+        console.log('6. Toggle search status');
+        console.log('7. Update check interval');
+        console.log('8. Update webhook assignment');
+        console.log('9. Back to main menu');
+
+        const choice = await question('\nEnter your choice: ');
+
+        switch (choice) {
+            case '1':
+                await listSearches(config);
+                break;
+            case '2':
+        await addSearch();
+                break;
+            case '3':
+                if (hasApiCredentials) {
+                    await configureApiSearch();
+    } else {
+                    show.info('eBay API credentials not found. Please set EBAY_APP_ID and EBAY_CERT_ID in your .env file to use API features.');
+                    show.info('You can still use URL-based searches without API credentials.');
+                }
+                break;
+            case '4':
+                await editSearch();
+                break;
+            case '5':
+                await deleteSearch();
+                break;
+            case '6':
+                await toggleSearchStatus();
+                break;
+            case '7':
+                await updateSearchInterval();
+                break;
+            case '8':
+                await updateSearchWebhook();
+                break;
+            case '9':
+                return;
+            default:
+                console.log('Invalid choice');
+        }
     }
 }
 
@@ -756,34 +941,484 @@ async function showStoreActions(index) {
     }
 }
 
-async function showSearchActions(index) {
-    const config = await loadConfig();
+async function lookupCategories(searchTerm) {
+    try {
+        // Get eBay token
+        const token = await getEbayToken();
+        if (!token) {
+            show.error('Failed to get eBay token');
+            return null;
+        }
+
+        // Get category tree ID for Canadian marketplace
+        const treeResponse = await axios.get(
+            'https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id',
+            {
+                params: { marketplace_id: 'EBAY_CA' },
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const treeId = treeResponse.data.categoryTreeId;
+        if (!treeId) {
+            show.error('Failed to get category tree ID');
+            return null;
+        }
+
+        // Get category suggestions
+        show.info('Requesting category suggestions...');
+        const suggestionsResponse = await axios.get(
+            `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions`,
+            {
+                params: { 
+                    q: searchTerm,
+                    limit: 10
+                },
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const suggestions = suggestionsResponse.data.categorySuggestions;
+        if (!suggestions || !Array.isArray(suggestions) || suggestions.length === 0) {
+            show.info('No category suggestions found for this search term');
+            return null;
+        }
+
+        // Display category suggestions
+        console.log('\n=== Category Suggestions ===');
+        console.log('IMPORTANT: Selecting a category will ONLY show items from that specific category.');
+        console.log('For example, selecting "Cell Phones & Smartphones" will exclude accessories and parts.\n');
+        
+        suggestions.forEach((suggestion, index) => {
+            if (suggestion && suggestion.category) {
+                const category = suggestion.category;
+                console.log(`${index + 1}. ${category.categoryName} (ID: ${category.categoryId})`);
+                
+                // Show category path if available
+                if (suggestion.categoryTreeNodeAncestors && Array.isArray(suggestion.categoryTreeNodeAncestors)) {
+                    const path = suggestion.categoryTreeNodeAncestors
+                        .map(ancestor => ancestor.categoryName)
+                        .reverse()
+                        .join(' > ');
+                    console.log(`   Path: ${path} > ${category.categoryName}`);
+                }
+            }
+        });
+
+        if (suggestions.length === 0) {
+            show.info('No categories found. You can continue without a category.');
+            return null;
+        }
+
+        // Let user select a category
+        const choice = await question('\nSelect a category number (or press Enter to skip): ');
+        if (!choice) return null;
+
+        const selectedIndex = parseInt(choice) - 1;
+        if (selectedIndex >= 0 && selectedIndex < suggestions.length) {
+            const selected = suggestions[selectedIndex];
+            if (selected && selected.category) {
+                // Return both ID and path for better context
+                return {
+                    id: selected.category.categoryId,
+                    name: selected.category.categoryName,
+                    path: selected.categoryTreeNodeAncestors
+                        ? [...selected.categoryTreeNodeAncestors.map(a => a.categoryName).reverse(), selected.category.categoryName].join(' > ')
+                        : selected.category.categoryName
+                };
+            }
+        }
+
+        show.error('Invalid category selection');
+        return null;
+    } catch (error) {
+        if (error.response) {
+            show.error(`eBay API Error: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+        } else {
+            show.error(`Error looking up categories: ${error.message}`);
+        }
+        return null;
+    }
+}
+
+async function getEbayToken() {
+    try {
+        // Check if credentials exist
+        if (!process.env.EBAY_APP_ID || !process.env.EBAY_CERT_ID) {
+            show.error('eBay API credentials not found. Please set EBAY_APP_ID and EBAY_CERT_ID in your .env file to use API features.');
+            show.info('You can still use URL-based searches without API credentials.');
+            return null;
+        }
+
+        show.info('Authenticating with eBay API...');
+        const response = await axios.post(
+            'https://api.ebay.com/identity/v1/oauth2/token',
+            'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope',
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': `Basic ${Buffer.from(process.env.EBAY_APP_ID + ':' + process.env.EBAY_CERT_ID).toString('base64')}`
+                }
+            }
+        );
+        show.success('Successfully authenticated with eBay API');
+        return response.data.access_token;
+    } catch (error) {
+        if (error.response) {
+            show.error(`eBay API Error: ${error.response.status} - ${error.response.data.error_description || 'Authentication failed'}`);
+            if (error.response.status === 401) {
+                show.error('Please check your eBay API credentials (EBAY_APP_ID and EBAY_CERT_ID)');
+                show.info('You can still use URL-based searches without API credentials.');
+            }
+        } else if (error.request) {
+            show.error('No response from eBay API. Please check your internet connection.');
+        } else {
+            show.error(`Error setting up eBay API request: ${error.message}`);
+        }
+        return null;
+    }
+}
+
+async function configureApiSearch() {
     console.clear();
-    const search = config.searches[index];
-    console.log('==========================================');
-    console.log(`=== Search: ${search.name} ===`);
-    console.log(`URL: ${search.url}`);
-    console.log(`Status: ${search.enabled ? 'Enabled' : 'Disabled'}`);
-    console.log('==========================================');
-    console.log('\nOptions:');
-    console.log('- Press E to edit search');
-    console.log('- Press D to delete search');
-    console.log('- Press T to toggle status');
-    console.log('- Press B to go back');
+    const config = await loadConfig();
+    console.log('\n=== Configure API Search ===');
     
-    const input = await question('\nEnter your choice: ');
-    switch(input.toLowerCase()) {
-        case 'e':
-            await editSearch(index);
+    // Get search term
+    const searchTerm = await question('Enter search term: ');
+    if (!searchTerm) {
+        show.error('Search term is required');
+        return;
+    }
+
+    // Use search term as name
+    const name = searchTerm;
+
+    // Get category (optional)
+    const useCategory = (await question('Would you like to specify a category? (y/n): ')).toLowerCase() === 'y';
+    let category = null;
+    if (useCategory) {
+        show.info('Looking up categories for your search term...');
+        category = await lookupCategories(searchTerm);
+        if (!category) {
+            show.error('Failed to get category suggestions. Continuing without category...');
+        } else {
+            show.success(`Selected category: ${category.path}`);
+            show.info('Only items from this specific category will be shown.');
+        }
+    }
+
+    // Get price range (optional)
+    const usePriceRange = (await question('Would you like to set a price range? (y/n): ')).toLowerCase() === 'y';
+    let minPrice = null;
+    let maxPrice = null;
+    if (usePriceRange) {
+        minPrice = await question('Enter minimum price (leave empty for no minimum): ');
+        maxPrice = await question('Enter maximum price (leave empty for no maximum): ');
+    }
+
+    // Get other filters
+    const useFilters = (await question('Would you like to add additional filters? (y/n): ')).toLowerCase() === 'y';
+    let filters = [];
+    if (useFilters) {
+        while (true) {
+            console.log('\nAvailable filters:');
+            console.log('1. Condition');
+            console.log('   - NEW');
+            console.log('   - USED');
+            console.log('   - OPEN_BOX');
+            console.log('   - REFURBISHED');
+            console.log('   - FOR_PARTS_OR_NOT_WORKING');
+            console.log('\n2. Buying Options');
+            console.log('   - AUCTION');
+            console.log('   - FIXED_PRICE');
+            console.log('   - BEST_OFFER');
+            console.log('\n3. Location');
+            console.log('   - US');
+            console.log('   - CA');
+            console.log('   - WORLDWIDE');
+            console.log('\n4. Free Shipping');
+            console.log('   - true');
+            console.log('   - false');
+            console.log('\n5. Returns Accepted');
+            console.log('   - true');
+            console.log('   - false');
+            console.log('\n6. Done adding filters');
+            
+            const filterChoice = await question('\nChoose filter number: ');
+            if (!filterChoice || filterChoice === '6') break;
+
+            let filterValue;
+            switch (filterChoice) {
+                case '1':
+                    filterValue = await question('Enter condition (NEW/USED/OPEN_BOX/REFURBISHED/FOR_PARTS_OR_NOT_WORKING): ');
             break;
-        case 'd':
-            await deleteSearch(index);
+                case '2':
+                    filterValue = await question('Enter buying option (AUCTION/FIXED_PRICE/BEST_OFFER): ');
             break;
-        case 't':
-            await toggleSearchStatus(index);
+                case '3':
+                    filterValue = await question('Enter location (US/CA/WORLDWIDE): ');
             break;
-        case 'b':
+                case '4':
+                    filterValue = await question('Free shipping? (true/false): ');
+                    break;
+                case '5':
+                    filterValue = await question('Returns accepted? (true/false): ');
+                    break;
+                default:
+                    show.error('Invalid filter choice');
+                    continue;
+            }
+
+            if (filterValue) {
+                filters.push({ type: filterChoice, value: filterValue });
+                show.success(`Added filter: ${filterValue}`);
+            }
+        }
+    }
+
+    // Get check interval
+    const intervalInput = await question('Enter check interval in minutes (default: 5): ');
+    let interval = intervalInput ? parseInt(intervalInput) : 5;
+    if (isNaN(interval) || interval < 1) {
+        show.info('Invalid interval. Using default of 5 minutes.');
+        interval = 5;
+    }
+
+    // Get webhook assignment
+    let webhookId = null;
+    if (config.webhooks.length > 0) {
+        console.log('\nAvailable webhooks:');
+        config.webhooks.forEach((webhook, index) => {
+            console.log(`${index + 1}. ${webhook.name} (${webhook.url.substring(0, 30)}...)`);
+        });
+        console.log(`${config.webhooks.length + 1}. None (no webhook)`);
+        
+        const webhookChoice = await question('Choose webhook number: ');
+        const webhookIndex = parseInt(webhookChoice) - 1;
+        
+        if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
+            webhookId = config.webhooks[webhookIndex].id;
+            show.success(`Selected webhook: ${config.webhooks[webhookIndex].name}`);
+        } else if (webhookIndex === config.webhooks.length) {
+            show.info('No webhook selected');
+        } else {
+            show.error('Invalid webhook choice. No webhook selected.');
+        }
+    } else {
+        show.info('No webhooks configured. You can add webhooks later.');
+    }
+
+    // Create the search configuration
+    const searchConfig = {
+        name,
+        type: 'api',
+        searchTerm,
+        categoryId: category?.id || null,
+        categoryPath: category?.path || null,
+        minPrice,
+        maxPrice,
+        filters,
+        interval,
+        enabled: true,
+        webhookId: webhookId || null
+    };
+
+    // Test the search configuration
+    console.log('\nTesting search configuration...');
+    try {
+        console.log('\nSearch configuration:');
+        console.log(JSON.stringify(searchConfig, null, 2));
+        
+        const save = await question('\nWould you like to save this search? (y/n): ');
+        if (save.toLowerCase() === 'y') {
+            // Ensure webhookId is properly set before saving
+            if (!webhookId && config.webhooks.length > 0) {
+                const useDefaultWebhook = await question('Would you like to use the default webhook? (y/n): ');
+                if (useDefaultWebhook.toLowerCase() === 'y') {
+                    webhookId = config.webhooks[0].id;
+                    searchConfig.webhookId = webhookId;
+                    show.success(`Using default webhook: ${config.webhooks[0].name}`);
+                }
+            }
+            
+            config.searches.push(searchConfig);
+            await saveConfig(config);
+            show.success('API search added successfully!');
+        } else {
+            show.info('Search configuration discarded.');
+        }
+    } catch (error) {
+        show.error(`Error testing search: ${error.message}`);
+    }
+}
+
+async function configureStore() {
+    console.clear();
+    const config = await loadConfig();
+    console.log('\n=== Configure Store ===');
+
+    // Check if API credentials exist
+    const hasApiCredentials = process.env.EBAY_APP_ID && process.env.EBAY_CERT_ID;
+    
+    // Let user choose store type
+    console.log('\nStore Type:');
+    console.log('1. URL-based (Web Scraping)');
+    if (hasApiCredentials) {
+        console.log('2. API-based (Requires eBay API credentials)');
+    }
+    
+    const typeChoice = await question('\nChoose store type: ');
+    let storeType;
+    
+    if (typeChoice === '2' && hasApiCredentials) {
+        storeType = 'api';
+    } else {
+        storeType = 'url';
+        if (typeChoice === '2') {
+            show.error('eBay API credentials not found. Defaulting to URL-based store.');
+            show.info('To use API-based stores, set EBAY_APP_ID and EBAY_CERT_ID in your .env file.');
+        }
+    }
+
+    // Get store name
+    const name = await question('Enter store name: ');
+    if (!name) {
+        show.error('Store name is required');
             return;
+    }
+
+    let storeConfig;
+    
+    if (storeType === 'api') {
+        // API-based store configuration
+        const storeId = await question('Enter eBay seller username or store name: ');
+        if (!storeId) {
+            show.error('Seller username/store name is required for API-based stores');
+            return;
+        }
+
+        // Get check interval
+        const intervalInput = await question('Enter check interval in minutes (default: 5): ');
+        let interval = intervalInput ? parseInt(intervalInput) : 5;
+        if (isNaN(interval) || interval < 1) {
+            show.info('Invalid interval. Using default of 5 minutes.');
+            interval = 5;
+        }
+
+        // Get webhook assignment
+        let webhookId = null;
+        if (config.webhooks.length > 0) {
+            console.log('\nAvailable webhooks:');
+            config.webhooks.forEach((webhook, index) => {
+                console.log(`${index + 1}. ${webhook.name} (${webhook.url.substring(0, 30)}...)`);
+            });
+            console.log(`${config.webhooks.length + 1}. None (no webhook)`);
+            
+            const webhookChoice = await question('Choose webhook number: ');
+            const webhookIndex = parseInt(webhookChoice) - 1;
+            
+            if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
+                webhookId = config.webhooks[webhookIndex].id;
+                show.success(`Selected webhook: ${config.webhooks[webhookIndex].name}`);
+            } else if (webhookIndex === config.webhooks.length) {
+                show.info('No webhook selected');
+            } else {
+                show.error('Invalid webhook choice. No webhook selected.');
+            }
+        } else {
+            show.info('No webhooks configured. You can add webhooks later.');
+        }
+
+        storeConfig = {
+            name,
+            type: 'api',
+            storeId,
+            interval,
+            enabled: true,
+            webhookId: webhookId || null
+        };
+    } else {
+        // URL-based store configuration
+        const url = await question('Enter store URL: ');
+        if (!url) {
+            show.error('Store URL is required');
+            return;
+        }
+
+        // Get check interval
+        const intervalInput = await question('Enter check interval in minutes (default: 5): ');
+        let interval = intervalInput ? parseInt(intervalInput) : 5;
+        if (isNaN(interval) || interval < 1) {
+            show.info('Invalid interval. Using default of 5 minutes.');
+            interval = 5;
+        }
+
+        // Get webhook assignment
+        let webhookId = null;
+        if (config.webhooks.length > 0) {
+            console.log('\nAvailable webhooks:');
+            config.webhooks.forEach((webhook, index) => {
+                console.log(`${index + 1}. ${webhook.name} (${webhook.url.substring(0, 30)}...)`);
+            });
+            console.log(`${config.webhooks.length + 1}. None (no webhook)`);
+            
+            const webhookChoice = await question('Choose webhook number: ');
+            const webhookIndex = parseInt(webhookChoice) - 1;
+            
+            if (webhookIndex >= 0 && webhookIndex < config.webhooks.length) {
+                webhookId = config.webhooks[webhookIndex].id;
+                show.success(`Selected webhook: ${config.webhooks[webhookIndex].name}`);
+            } else if (webhookIndex === config.webhooks.length) {
+                show.info('No webhook selected');
+            } else {
+                show.error('Invalid webhook choice. No webhook selected.');
+            }
+        } else {
+            show.info('No webhooks configured. You can add webhooks later.');
+        }
+
+        storeConfig = {
+            name,
+            type: 'url',
+            url,
+            interval,
+            enabled: true,
+            webhookId: webhookId || null
+        };
+    }
+
+    // Test the store configuration
+    console.log('\nTesting store configuration...');
+    try {
+        console.log('\nStore configuration:');
+        console.log(JSON.stringify(storeConfig, null, 2));
+        
+        const save = await question('\nWould you like to save this store? (y/n): ');
+        if (save.toLowerCase() === 'y') {
+            // Ensure webhookId is properly set before saving
+            if (!storeConfig.webhookId && config.webhooks.length > 0) {
+                const useDefaultWebhook = await question('Would you like to use the default webhook? (y/n): ');
+                if (useDefaultWebhook.toLowerCase() === 'y') {
+                    storeConfig.webhookId = config.webhooks[0].id;
+                    show.success(`Using default webhook: ${config.webhooks[0].name}`);
+                }
+            }
+            
+            config.stores.push(storeConfig);
+            await saveConfig(config);
+            show.success('Store added successfully!');
+        } else {
+            show.info('Store configuration discarded.');
+        }
+    } catch (error) {
+        show.error(`Error testing store: ${error.message}`);
     }
 }
 

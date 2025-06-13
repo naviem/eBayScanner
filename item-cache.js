@@ -4,7 +4,9 @@ const path = require('path');
 class ItemCache {
     constructor() {
         this.cache = new Map();
-        this.cacheFile = path.join(__dirname, 'item-cache.json');
+        this.cacheFile = process.env.DOCKER ? 
+            path.join('/app/data', 'item-cache.json') : 
+            path.join(__dirname, 'item-cache.json');
         this.loadCache();
     }
 

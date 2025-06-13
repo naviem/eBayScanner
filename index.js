@@ -1,4 +1,10 @@
 require('dotenv').config();
+console.log('EBAY_APP_ID:', process.env.EBAY_APP_ID);
+console.log('EBAY_CERT_ID:', process.env.EBAY_CERT_ID);
+console.log('EBAY_DEV_ID:', process.env.EBAY_DEV_ID);
+console.log('EBAY_OAUTH_TOKEN exists:', !!process.env.EBAY_OAUTH_TOKEN);
+console.log('EBAY_OAUTH_TOKEN starts with:', process.env.EBAY_OAUTH_TOKEN?.substring(0, 2));
+console.log('EBAY_SANDBOX:', process.env.EBAY_SANDBOX);
 const axios = require('axios');
 const cron = require('node-cron');
 const cheerio = require('cheerio');
@@ -7,12 +13,17 @@ const path = require('path');
 const ItemCache = require('./item-cache');
 const usageStats = require('./usage-stats');
 
-// Initialize eBay API configuration if credentials are available
-const hasEbayCredentials = process.env.EBAY_APP_ID && process.env.EBAY_CERT_ID && process.env.EBAY_DEV_ID;
-const ebayApiConfig = hasEbayCredentials ? {
+// Initialize eBay API configuration
+const hasEbayApiToken = process.env.EBAY_APP_ID && process.env.EBAY_CERT_ID && process.env.EBAY_DEV_ID;
+const ebayApiConfig = hasEbayApiToken ? {
     headers: {
-        'X-EBAY-API-IAF-TOKEN': process.env.EBAY_APP_ID,
-        'Content-Type': 'application/json'
+        'X-EBAY-API-IAF-TOKEN': process.env.EBAY_OAUTH_TOKEN,
+        'X-EBAY-API-APP-ID': process.env.EBAY_APP_ID,
+        'X-EBAY-API-CERT-ID': process.env.EBAY_CERT_ID,
+        'X-EBAY-API-DEV-NAME': process.env.EBAY_DEV_ID,
+        'Content-Type': 'application/json',
+        'X-EBAY-C-MARKPLACE-ID': 'EBAY_CA',
+        'X-EBAY-C-ENDUSERCTX': 'contextualLocation=country=CA'
     }
 } : null;
 
@@ -157,37 +168,21 @@ async function checkEbaySearch(search) {
         let bytesReceived = 0;
         let requestCount = 0;
         let itemsProcessed = 0;
-        
-        // Parse the search URL to extract parameters
-        const searchUrl = new URL(search.url);
-        const params = new URLSearchParams(searchUrl.search);
-        
-        // Construct the search URL properly
-        const searchParams = new URLSearchParams({
-            '_nkw': params.get('_nkw') || '',
-            '_sacat': '0',
-            '_from': 'R40',
-            '_sop': '10',
-            'rt': 'nc'
-        });
-        
-        // Add minimum price if specified
-        const minPrice = params.get('_udlo');
-        if (minPrice) {
-            searchParams.append('_udlo', minPrice);
-        }
-        
-        const url = `https://www.ebay.ca/sch/i.html?${searchParams.toString()}`;
+
+        // Use the URL directly for webscrape mode
+        const url = search.url;
         console.log(`${getTimestamp()} Fetching search results from: ${url}`);
 
         const response = await axios.get(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
-                'Cache-Control': 'max-age=0'
+                'Referer': 'https://www.ebay.ca/'
+                // 'Cookie': '...' // (optional, from a real browser session)
             }
         });
 
@@ -227,6 +222,13 @@ async function checkEbaySearch(search) {
 
         console.log(`${getTimestamp()} Total items found on page: ${items.length}`);
 
+        // Sort items by listing date (newest first)
+        items.sort((a, b) => {
+            const dateA = new Date(a.timeLeft);
+            const dateB = new Date(b.timeLeft);
+            return dateB - dateA;
+        });
+
         let newItems = 0;
         let notifiedItems = 0;
 
@@ -258,91 +260,468 @@ async function checkEbaySearch(search) {
     }
 }
 
-async function checkStoreListings(store) {
-    if (hasEbayCredentials) {
-        return await checkEbayStoreAPI(store.id);
-    } else {
-        return await checkEbayStoreScraping(store.id);
+// Helper to extract seller name from store URL
+function getSellerNameFromStoreUrl(url) {
+    // Example: https://www.ebay.ca/str/surplusbydesign
+    const match = url.match(/\/str\/([^/?]+)/i);
+    return match ? match[1] : null;
+}
+
+// Helper to extract search keywords from search URL
+function getSearchParamsFromUrl(url) {
+    try {
+        const u = new URL(url);
+        const params = {};
+        if (u.searchParams.get('_nkw')) params.q = u.searchParams.get('_nkw');
+        // Add more param extraction as needed
+        return params;
+    } catch {
+        return {};
     }
 }
 
-async function checkSearchListings(search) {
-    if (hasEbayCredentials) {
-        // Extract search parameters from URL
-        const url = new URL(search.url);
-        const params = Object.fromEntries(url.searchParams);
-        return await checkEbaySearchAPI(params);
+// Updated checkStoreListings
+async function checkStoreListings(store) {
+    if (hasEbayApiToken) {
+        return await checkEbayStoreAPI(store);
     } else {
+        return await checkEbayStore(store);
+    }
+}
+
+// Updated checkSearchListings
+async function checkSearchListings(search) {
+    if (hasEbayApiToken) {
+        // Use the search URL directly from the config
+        return await checkEbaySearchAPI(search);
+    } else {
+        return await checkEbaySearch(search);
+    }
+}
+
+// Modify token validation
+function validateEbayToken() {
+    if (!process.env.EBAY_APP_ID || !process.env.EBAY_CERT_ID || !process.env.EBAY_DEV_ID) {
+        console.log('Missing required eBay API credentials');
+        return false;
+    }
+
+    if (!process.env.EBAY_OAUTH_TOKEN) {
+        console.log('No eBay API token found');
+        return false;
+    }
+
+    // For Browse API, we need to ensure the token is in the correct format
+    const token = process.env.EBAY_OAUTH_TOKEN;
+    if (!token.startsWith('v^')) {
+        console.log('Invalid eBay API token format. Token should start with v^');
+        return false;
+    }
+
+    return true;
+}
+
+// Add this new function after getEbayToken
+async function getDefaultCategory(searchQuery) {
+    try {
+        const token = await getEbayToken();
+        
+        // First get the category tree ID for eBay Canada
+        const treeResponse = await axios.get(
+            'https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id',
+            {
+                params: { marketplace_id: 'EBAY_CA' },
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const treeId = treeResponse.data.categoryTreeId;
+        console.log(`${getTimestamp()} Got category tree ID: ${treeId}`);
+
+        // Then get category suggestions for the search query
+        const suggestionsResponse = await axios.get(
+            `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions`,
+            {
+                params: { q: searchQuery },
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        console.log(`${getTimestamp()} Category suggestions:`, JSON.stringify(suggestionsResponse.data, null, 2));
+
+        // Get the first (most relevant) category suggestion
+        if (suggestionsResponse.data.categorySuggestions && 
+            suggestionsResponse.data.categorySuggestions.length > 0) {
+            const category = suggestionsResponse.data.categorySuggestions[0].category;
+            console.log(`${getTimestamp()} Selected category:`, category);
+            return category.categoryId;
+        }
+
+        return null;
+    } catch (error) {
+        console.error('Error getting default category:', error.message);
+        if (error.response) {
+            console.error('Category API Response:', error.response.data);
+        }
+        return null;
+    }
+}
+
+// Update the checkEbaySearchAPI function to use the default category
+async function checkEbaySearchAPI(search) {
+    if (!validateEbayToken()) {
         return await checkEbaySearchScraping(search.url);
     }
-}
-
-async function checkEbayStoreAPI(storeId) {
     try {
-        const apiUrl = process.env.EBAY_SANDBOX === 'true' 
-            ? 'https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search'
-            : 'https://api.ebay.com/buy/browse/v1/item_summary/search';
+        const token = await getEbayToken();
+        console.log(`${getTimestamp()} Using category ID: ${search.categoryId}`);
 
-        const response = await axios.get(apiUrl, {
-            ...ebayApiConfig,
-            params: {
-                filter: `sellerName:${storeId}`,
-                sort: 'newlyListed',
-                limit: 100
+        // Build filter array
+        const filterArray = [
+            'deliveryCountry:CA',
+            'buyingOptions:{FIXED_PRICE|AUCTION}'
+        ];
+
+        // Add price filters if specified
+        if (search.minPrice) {
+            filterArray.push(`price:[${search.minPrice}..]`);
+        }
+        if (search.maxPrice) {
+            filterArray.push(`price:[..${search.maxPrice}]`);
+        }
+
+        // Add additional filters
+        if (search.filters && search.filters.length > 0) {
+            filterArray.push(...search.filters);
+        }
+
+        // Log the full filter string for debugging
+        console.log(`${getTimestamp()} Full filter string:`, filterArray.join(','));
+
+        const searchParams = {
+            'q': search.searchTerm,
+            'sort': 'newlyListed',
+            'limit': 200,
+            'filter': filterArray.join(',')
+        };
+
+        // Add category ID as a separate query parameter if specified
+        if (search.categoryId) {
+            // Validate category ID format
+            if (!/^\d+$/.test(search.categoryId)) {
+                console.error(`${getTimestamp()} Invalid category ID format: ${search.categoryId}`);
+            } else {
+                searchParams.category_ids = search.categoryId;
+            }
+        }
+
+        console.log(`${getTimestamp()} Making API request with params:`, {
+            q: search.searchTerm,
+            sort: 'newlyListed',
+            limit: 200,
+            filter: filterArray.join(',')
+        });
+
+        const response = await axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
+            params: searchParams,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'X-EBAY-C-MARKETPLACE-ID': 'EBAY_CA',
+                'X-EBAY-C-ENDUSERCTX': 'contextualLocation=country=CA'
             }
         });
 
-        const items = response.data.itemSummaries || [];
+        // Only log essential response info
+        console.log(`${getTimestamp()} API Response Status: ${response.status}`);
+        console.log(`${getTimestamp()} Total items found: ${response.data.total}`);
         
-        // Filter out items we've already seen
-        return items
-            .filter(item => itemCache.isNewItem('store', storeId, item.itemId))
-            .map(item => ({
-                id: item.itemId,
-                title: item.title,
-                price: item.price.value,
-                url: item.itemWebUrl,
-                imageUrl: item.image?.imageUrl,
-                condition: item.condition,
-                location: item.itemLocation
-            }));
+        if (response.data.warnings) {
+            console.log(`${getTimestamp()} API Warnings:`, response.data.warnings.map(w => w.message).join(', '));
+        }
+
+        if (!response.data || !response.data.itemSummaries) {
+            console.error(`${getTimestamp()} Invalid API response format. Response data:`, response.data);
+            throw new Error('Invalid API response format - missing itemSummaries');
+        }
+
+        const items = response.data.itemSummaries;
+        let newItems = 0;
+        let notifiedItems = 0;
+        const newItemsList = [];
+
+        // First, collect all new items
+        for (const item of items) {
+            if (itemCache.isNewItem('search', search.name, item.itemId)) {
+                newItems++;
+                
+                // Extract shipping cost
+                let shippingCost = 'N/A';
+                if (item.shippingOptions && item.shippingOptions.length > 0) {
+                    const shippingOption = item.shippingOptions[0];
+                    if (shippingOption.shippingCost) {
+                        if (shippingOption.shippingCost.value === '0.00') {
+                            shippingCost = 'Free';
+                        } else {
+                            shippingCost = `${shippingOption.shippingCost.value} ${shippingOption.shippingCost.currency || 'CAD'}`;
+                        }
+                    }
+                }
+                
+                // Extract price
+                let price = 'N/A';
+                let currency = 'CAD';
+                if (item.price && item.price.value) {
+                    price = `${item.price.value} ${item.price.currency || 'CAD'}`;
+                    currency = item.price.currency || 'CAD';
+                } else if (item.currentBidPrice && item.currentBidPrice.value) {
+                    price = `${item.currentBidPrice.value} ${item.currentBidPrice.currency || 'CAD'} (Current Bid)`;
+                    currency = item.currentBidPrice.currency || 'CAD';
+                }
+
+                // Extract listing type and bids
+                let listingType = 'Unknown';
+                let bids = 'N/A';
+                if (item.buyingOptions && item.buyingOptions.length > 0) {
+                    listingType = item.buyingOptions[0];
+                }
+                if (item.bidCount !== undefined) {
+                    bids = item.bidCount.toString();
+                }
+
+                const processedItem = {
+                    id: item.itemId,
+                    title: item.title,
+                    price: price,
+                    currency: currency,
+                    url: item.itemWebUrl,
+                    imageUrl: item.image?.imageUrl,
+                    condition: item.condition,
+                    location: item.itemLocation?.country,
+                    shipping: shippingCost,
+                    listingType: listingType,
+                    bids: bids,
+                    itemEndDate: item.itemEndDate,
+                    itemCreationDate: item.itemCreationDate
+                };
+                
+                newItemsList.push(processedItem);
+            }
+        }
+
+        // Then, send notifications in order
+        if (newItems > 0) {
+            console.log(`${getTimestamp()} Found ${newItems} new items for search "${search.name}"`);
+            
+            // Send notifications for the first 2 items or all items if not first run
+            const itemsToNotify = isFirstRun ? newItemsList.slice(0, 2) : newItemsList;
+            
+            for (const item of itemsToNotify) {
+                await sendDiscordNotification(search, item);
+                notifiedItems++;
+            }
+
+            if (isFirstRun && newItems > 2) {
+                console.log(`${getTimestamp()} Note: ${newItems - 2} additional new items found but not notified to prevent spam`);
+            }
+        } else {
+            console.log(`${getTimestamp()} No new items found for search "${search.name}"`);
+        }
+
+        return newItemsList;
+
     } catch (error) {
         console.error('Error using eBay API:', error.message);
+        if (error.response) {
+            console.error('API Response Status:', error.response.status);
+            console.error('API Response Headers:', error.response.headers);
+        }
         throw error;
     }
 }
 
-async function checkEbaySearchAPI(params) {
+async function checkEbayStoreAPI(store) {
     try {
-        const apiUrl = process.env.EBAY_SANDBOX === 'true' 
-            ? 'https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search'
-            : 'https://api.ebay.com/buy/browse/v1/item_summary/search';
+        const token = await getEbayToken();
+        console.log(`${getTimestamp()} Checking store "${store.name}" using eBay API`);
 
-        const response = await axios.get(apiUrl, {
-            ...ebayApiConfig,
-            params: {
-                ...params,
-                sort: 'newlyListed',
-                limit: 100
+        // Get store name based on store type
+        let storeName;
+        if (store.type === 'api') {
+            storeName = store.storeId;
+        } else {
+            // Extract store name from URL for URL-based stores
+            storeName = store.url.split('/str/')[1]?.split('?')[0] || store.url.split('_ssn=')[1]?.split('&')[0];
+        }
+        
+        if (!storeName) {
+            console.error(`Could not determine store name for store: ${store.name}`);
+            return [];
+        }
+
+        // Log the API request details
+        console.log(`${getTimestamp()} Making API request for store: ${storeName}`);
+        
+        // Search parameters for Canadian marketplace
+        const searchParams = {
+            'q': ' ',
+            'sort': 'newlyListed',
+            'sort_order': 'DESCENDING',
+            'limit': 200,
+            'filter': [
+                'conditions:{NEW|USED}',
+                'deliveryCountry:CA',
+                'sellers:{' + storeName + '}',
+                'buyingOptions:{FIXED_PRICE|AUCTION}',
+                'priceCurrency:CAD'
+            ].join(',')
+        };
+
+        const response = await axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
+            params: searchParams,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'X-EBAY-C-MARKETPLACE-ID': 'EBAY_CA',
+                'X-EBAY-C-ENDUSERCTX': 'contextualLocation=country=CA'
             }
         });
 
-        const items = response.data.itemSummaries || [];
-        
-        // Filter out items we've already seen
-        return items
-            .filter(item => itemCache.isNewItem('search', params._nkw, item.itemId))
-            .map(item => ({
-                id: item.itemId,
-                title: item.title,
-                price: item.price.value,
-                url: item.itemWebUrl,
-                imageUrl: item.image?.imageUrl,
-                condition: item.condition,
-                location: item.itemLocation
-            }));
+        // Only log essential response info
+        console.log(`${getTimestamp()} API Response Status:`, response.status);
+
+        if (!response.data || !response.data.itemSummaries) {
+            console.error(`${getTimestamp()} Invalid API response format. Response data:`, response.data);
+            throw new Error('Invalid API response format - missing itemSummaries');
+        }
+
+        const items = response.data.itemSummaries;
+        let newItems = 0;
+        let notifiedItems = 0;
+        const newItemsList = [];
+
+        // First, collect all new items
+        for (const item of items) {
+            if (itemCache.isNewItem('store', store.name, item.itemId)) {
+                newItems++;
+                
+                // Extract shipping cost
+                let shippingCost = 'N/A';
+                if (item.shippingOptions && item.shippingOptions.length > 0) {
+                    const shippingOption = item.shippingOptions[0];
+                    if (shippingOption.shippingCost) {
+                        if (shippingOption.shippingCost.value === '0.00') {
+                            shippingCost = 'Free';
+                        } else {
+                            shippingCost = `${shippingOption.shippingCost.value} ${shippingOption.shippingCost.currency || 'CAD'}`;
+                        }
+                    }
+                }
+                
+                // Extract price
+                let price = 'N/A';
+                let currency = 'CAD';
+                if (item.price && item.price.value) {
+                    price = `${item.price.value} ${item.price.currency || 'CAD'}`;
+                    currency = item.price.currency || 'CAD';
+                } else if (item.currentBidPrice && item.currentBidPrice.value) {
+                    price = `${item.currentBidPrice.value} ${item.currentBidPrice.currency || 'CAD'} (Current Bid)`;
+                    currency = item.currentBidPrice.currency || 'CAD';
+                }
+
+                // Extract listing type and bids
+                let listingType = 'Unknown';
+                let bids = 'N/A';
+                if (item.buyingOptions && item.buyingOptions.length > 0) {
+                    listingType = item.buyingOptions[0];
+                }
+                if (item.bidCount !== undefined) {
+                    bids = item.bidCount.toString();
+                }
+
+                const processedItem = {
+                    id: item.itemId,
+                    title: item.title,
+                    price: price,
+                    currency: currency,
+                    url: item.itemWebUrl,
+                    imageUrl: item.image?.imageUrl,
+                    condition: item.condition,
+                    location: item.itemLocation?.country,
+                    shipping: shippingCost,
+                    listingType: listingType,
+                    bids: bids,
+                    itemEndDate: item.itemEndDate,
+                    itemCreationDate: item.itemCreationDate
+                };
+                
+                newItemsList.push(processedItem);
+            }
+        }
+
+        // Then, send notifications in order
+        if (newItems > 0) {
+            console.log(`${getTimestamp()} Found ${newItems} new items for store "${store.name}"`);
+            
+            // Send notifications for the first 2 items or all items if not first run
+            const itemsToNotify = isFirstRun ? newItemsList.slice(0, 2) : newItemsList;
+            
+            for (const item of itemsToNotify) {
+                await sendDiscordNotification(store, item);
+                notifiedItems++;
+            }
+
+            if (isFirstRun && newItems > 2) {
+                console.log(`${getTimestamp()} Note: ${newItems - 2} additional new items found but not notified to prevent spam`);
+            }
+        } else {
+            console.log(`${getTimestamp()} No new items found for store "${store.name}"`);
+        }
+
+        return newItemsList;
+
     } catch (error) {
         console.error('Error using eBay API:', error.message);
+        if (error.response) {
+            console.error('API Response Status:', error.response.status);
+            console.error('API Response Headers:', error.response.headers);
+        }
+        throw error;
+    }
+}
+
+// Add function to get a fresh token
+async function getEbayToken() {
+    try {
+        const tokenUrl = process.env.EBAY_SANDBOX === 'true'
+            ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
+            : 'https://api.ebay.com/identity/v1/oauth2/token';
+
+        const credentials = Buffer.from(`${process.env.EBAY_APP_ID}:${process.env.EBAY_CERT_ID}`).toString('base64');
+
+        const response = await axios.post(tokenUrl, 
+            'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope',
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': `Basic ${credentials}`
+                }
+            }
+        );
+
+        return response.data.access_token;
+    } catch (error) {
+        console.error('Error getting eBay token:', error.message);
+        if (error.response) {
+            console.error('Token Response Status:', error.response.status);
+            console.error('Token Response Data:', error.response.data);
+        }
         throw error;
     }
 }
@@ -607,40 +986,48 @@ function getRandomDelay(min, max) {
 }
 
 function startMonitoring() {
+    // Reset isFirstRun to true when bot starts/restarts
+    isFirstRun = true;
+    const apiMode = hasEbayApiToken;
+    
     console.log(`${getTimestamp()} Starting eBay scanner with ${config.stores.length} stores and ${config.searches.length} searches`);
-    console.log(`${getTimestamp()} Using web scraping method`);
+    console.log(`${getTimestamp()} Using ${apiMode ? 'eBay API' : 'web scraping'} method`);
+
+    // Filter stores and searches by type
+    const storesToScan = config.stores.filter(store => 
+        apiMode ? store.type === 'api' : store.type !== 'api'
+    );
+    const searchesToScan = config.searches.filter(search => 
+        apiMode ? search.type === 'api' : search.type !== 'api'
+    );
 
     // Schedule store checks
-    config.stores.forEach(store => {
+    storesToScan.forEach(store => {
         if (store.enabled) {
             const interval = store.interval || 5; // Default to 5 minutes if not specified
             console.log(`${getTimestamp()} Scheduling store ${store.name} to check every ${interval} minutes`);
-            
             // Run initial scan
             console.log(`${getTimestamp()} Running initial scan for store ${store.name}`);
             const initialDelay = getRandomDelay(1, 15);
             console.log(`${getTimestamp()} Waiting ${initialDelay} seconds before initial store scan`);
             setTimeout(() => {
-                checkEbayStore(store);
-                // Schedule next scan after this one completes
+                checkStoreListings(store);
                 scheduleNextStoreScan(store, interval);
             }, initialDelay * 1000);
         }
     });
 
     // Schedule search checks
-    config.searches.forEach(search => {
+    searchesToScan.forEach(search => {
         if (search.enabled) {
             const interval = search.interval || 5; // Default to 5 minutes if not specified
             console.log(`${getTimestamp()} Scheduling search ${search.name} to check every ${interval} minutes`);
-            
             // Run initial scan
             console.log(`${getTimestamp()} Running initial scan for search ${search.name}`);
             const initialDelay = getRandomDelay(1, 15);
             console.log(`${getTimestamp()} Waiting ${initialDelay} seconds before initial search scan`);
             setTimeout(() => {
-                checkEbaySearch(search);
-                // Schedule next scan after this one completes
+                checkSearchListings(search);
                 scheduleNextSearchScan(search, interval);
             }, initialDelay * 1000);
         }
@@ -654,8 +1041,7 @@ function scheduleNextStoreScan(store, interval) {
     
     setTimeout(() => {
         isFirstRun = false;
-        checkEbayStore(store);
-        // Schedule the next scan after this one completes
+        checkStoreListings(store);
         scheduleNextStoreScan(store, interval);
     }, (interval * 60 * 1000) + (delay * 1000));
 }
@@ -667,8 +1053,7 @@ function scheduleNextSearchScan(search, interval) {
     
     setTimeout(() => {
         isFirstRun = false;
-        checkEbaySearch(search);
-        // Schedule the next scan after this one completes
+        checkSearchListings(search);
         scheduleNextSearchScan(search, interval);
     }, (interval * 60 * 1000) + (delay * 1000));
 }
@@ -687,19 +1072,33 @@ function cleanTitle(title) {
         .trim();
 }
 
-async function sendDiscordNotification(target, item) {
+async function sendDiscordNotification(search, item) {
     try {
         console.log(`${getTimestamp()} Sending notification for item: ${item.title}`);
         
-        // Get the webhook configuration
-        const webhookConfig = config.webhooks.find(w => w.name === target.webhook);
-        if (!webhookConfig) {
-            console.error(`${getTimestamp()} Webhook "${target.webhook}" not found in configuration`);
-            return;
+        // Get webhook URL
+        let webhookUrl = null;
+        if (search.webhookId) {
+            const webhook = config.webhooks.find(w => w.id === search.webhookId);
+            if (webhook) {
+                webhookUrl = webhook.url;
+                console.log(`${getTimestamp()} Using webhook: ${webhookUrl}`);
+            } else {
+                console.log(`${getTimestamp()} Webhook "${search.webhookId}" not found in configuration`);
+                return;
+            }
+        } else {
+            // Try to use default webhook if no specific webhook is assigned
+            if (config.webhooks.length > 0) {
+                webhookUrl = config.webhooks[0].url;
+                console.log(`${getTimestamp()} Using default webhook: ${webhookUrl}`);
+            } else {
+                console.log(`${getTimestamp()} No webhooks configured`);
+                return;
+            }
         }
 
-        console.log(`${getTimestamp()} Using webhook: ${webhookConfig.url}`);
-
+        // Create embed
         const embed = {
             title: item.title,
             url: item.url,
@@ -709,33 +1108,24 @@ async function sendDiscordNotification(target, item) {
                     name: 'Price',
                     value: item.price,
                     inline: true
-                },
-                {
-                    name: 'Condition',
-                    value: item.condition || 'Not specified',
-                    inline: true
-                },
-                {
-                    name: 'Location',
-                    value: item.location || 'Not specified',
-                    inline: true
-                },
-                {
-                    name: 'Listing Type',
-                    value: item.listingType || 'Not specified',
-                    inline: true
                 }
             ],
-            thumbnail: {
-                url: item.imageUrl
-            },
+            timestamp: new Date().toISOString(),
             footer: {
-                text: `New item found from ${target.name}`
-            },
-            timestamp: new Date().toISOString()
+                text: `New item from ${search.type === 'store' ? 'store' : 'search'} "${search.name}"`
+            }
         };
 
-        // Add shipping info if available
+        // Add condition if available
+        if (item.condition) {
+            embed.fields.push({
+                name: 'Condition',
+                value: item.condition,
+                inline: true
+            });
+        }
+
+        // Add shipping if available
         if (item.shipping) {
             embed.fields.push({
                 name: 'Shipping',
@@ -744,17 +1134,26 @@ async function sendDiscordNotification(target, item) {
             });
         }
 
-        // Add time left for auctions
-        if (item.timeLeft) {
+        // Add location if available
+        if (item.location) {
             embed.fields.push({
-                name: 'Time Left',
-                value: item.timeLeft,
+                name: 'Location',
+                value: item.location,
                 inline: true
             });
         }
 
-        // Add bids for auctions
-        if (item.bids) {
+        // Add listing type if available
+        if (item.listingType) {
+            embed.fields.push({
+                name: 'Listing Type',
+                value: item.listingType,
+                inline: true
+            });
+        }
+
+        // Add bids if available
+        if (item.bids !== 'N/A') {
             embed.fields.push({
                 name: 'Bids',
                 value: item.bids,
@@ -762,38 +1161,39 @@ async function sendDiscordNotification(target, item) {
             });
         }
 
-        // Add item specifics if available
-        if (item.specifics) {
+        // Add end date if available
+        if (item.itemEndDate) {
+            const endDate = new Date(item.itemEndDate);
             embed.fields.push({
-                name: 'Details',
-                value: item.specifics,
-                inline: false
+                name: 'Ends',
+                value: endDate.toLocaleString(),
+                inline: true
             });
         }
 
-        const message = {
-            content: `🔔 New item found in ${target.name}!`,
-            embeds: [embed]
-        };
+        // Add image if available
+        if (item.imageUrl) {
+            embed.image = {
+                url: item.imageUrl
+            };
+        }
 
-        const response = await axios.post(webhookConfig.url, message);
+        // Send to Discord
+        const response = await axios.post(webhookUrl, {
+            embeds: [embed]
+        });
+
         if (response.status === 204) {
             console.log(`${getTimestamp()} Discord notification sent successfully`);
         } else {
             console.error(`${getTimestamp()} Unexpected response from Discord:`, response.status);
         }
 
-        // Wait 2 seconds before sending next notification
+        // Wait 2 seconds before next notification to avoid rate limits
         console.log(`${getTimestamp()} Waiting 2 seconds before next notification...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
 
     } catch (error) {
-        if (error.response && error.response.status === 429) {
-            const retryAfter = error.response.headers['retry-after'] || 5;
-            console.log(`${getTimestamp()} Rate limited by Discord. Waiting ${retryAfter} seconds before retry...`);
-            await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-            return sendDiscordNotification(target, item); // Retry once
-        }
         console.error(`${getTimestamp()} Error sending Discord notification:`, error.message);
     }
 } 
