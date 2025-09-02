@@ -460,7 +460,7 @@ async function checkEbaySearchAPI(search) {
             hasDeliveryCountryFilter = search.filters.some(filter => filter.type === '3');
         }
         if (!hasDeliveryCountryFilter) {
-            filterArray.push('deliveryCountry:CA');
+            filterArray.push('itemLocationCountry:CA');
         }
 
         // Add price filters if specified
@@ -482,8 +482,8 @@ async function checkEbaySearchAPI(search) {
                     case '2': // Buying Options
                         filterString = `buyingOptions:{${filter.value}}`;
                         break;
-                    case '3': // Location
-                        filterString = `deliveryCountry:${filter.value}`;
+                    case '3': // Location (Item Location)
+                        filterString = `itemLocationCountry:${filter.value}`;
                         break;
                     case '4': // Free Shipping
                         if (filter.value === 'true') {
