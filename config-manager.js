@@ -154,7 +154,7 @@ async function listSearches(config) {
     config.searches.forEach((search, index) => {
         console.log(`${index + 1}. ${search.name || '(no name)'}${search.type ? ' [' + search.type + ']' : ''}`);
         if (search.url) {
-            console.log(`   URL: ${search.url}`);
+        console.log(`   URL: ${search.url}`);
         }
         if (search.searchTerm) {
             console.log(`   Search Term: ${search.searchTerm}`);
@@ -869,7 +869,7 @@ async function showSearchView() {
         console.log('7. Update check interval');
         console.log('8. Update webhook assignment');
         console.log('9. Back to main menu');
-
+    
         const choice = await question('\nEnter your choice: ');
 
         switch (choice) {
@@ -1150,7 +1150,7 @@ async function configureApiSearch() {
             console.log('   - true');
             console.log('   - false');
             console.log('\n6. Done adding filters');
-            
+    
             const filterChoice = await question('\nChoose filter number: ');
             if (!filterChoice || filterChoice === '6') break;
 
@@ -1419,6 +1419,24 @@ async function configureStore() {
         }
     } catch (error) {
         show.error(`Error testing store: ${error.message}`);
+    }
+}
+
+async function deleteStore(index) {
+    console.clear();
+    const config = await loadConfig();
+    if (config.stores.length === 0) {
+        show.error('No stores configured');
+        return;
+    }
+    const store = config.stores[index];
+    const confirm = await question(`Are you sure you want to delete store "${store.name}"? (y/n): `);
+    if (confirm.toLowerCase() === 'y') {
+        config.stores.splice(index, 1);
+        await saveConfig(config);
+        show.success('Store deleted successfully');
+    } else {
+        show.info('Deletion cancelled');
     }
 }
 

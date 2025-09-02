@@ -8,7 +8,7 @@ A Node.js tool that monitors eBay stores and searches for new listings, sending 
 - Monitor specific eBay search URLs for new listings
 - Configurable check intervals for each store and search
 - Discord notifications with item details
-- Support for both eBay API and web scraping methods
+- Support for both eBay API (future) and web scraping methods
 - Interactive configuration manager
 
 ## Setup
@@ -20,11 +20,12 @@ A Node.js tool that monitors eBay stores and searches for new listings, sending 
    ```
 3. Create a `.env` file with your configuration:
    ```
+   DISCORD_WEBHOOK_URL=your_discord_webhook_url
    EBAY_APP_ID=your_ebay_app_id
    EBAY_CERT_ID=your_ebay_cert_id
    EBAY_DEV_ID=your_ebay_dev_id
-   EBAY_OAUTH_TOKEN=your_ebay_user_token
-   EBAY_SANDBOX=false   ```
+   EBAY_SANDBOX=true  # Set to false for production
+   ```
 
 4. Configure your stores and searches using the interactive configuration manager:
    ```bash
@@ -46,6 +47,18 @@ The configuration manager (`config-manager.js`) is used to set up and modify you
 ```bash
 node config-manager.js
 ```
+
+Available options:
+1. List all stores
+2. List all searches
+3. Add new store
+4. Add new search
+5. Delete store
+6. Delete search
+7. Toggle store status
+8. Toggle search status
+9. Update check interval
+0. Exit
 
 ### Main Scanner
 The main scanner (`index.js`) is what actually monitors eBay and sends notifications. This is the program that needs to keep running to monitor your stores and searches.
@@ -114,7 +127,6 @@ For better performance and reliability, you can use the eBay API instead of web 
    EBAY_APP_ID=your_app_id
    EBAY_CERT_ID=your_cert_id
    EBAY_DEV_ID=your_dev_id
-   EBAY_OAUTH_TOKEN=your_ebay_user_token
    ```
 
 ## Search URL Tips

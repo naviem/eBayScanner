@@ -1,10 +1,4 @@
 require('dotenv').config();
-console.log('EBAY_APP_ID:', process.env.EBAY_APP_ID);
-console.log('EBAY_CERT_ID:', process.env.EBAY_CERT_ID);
-console.log('EBAY_DEV_ID:', process.env.EBAY_DEV_ID);
-console.log('EBAY_OAUTH_TOKEN exists:', !!process.env.EBAY_OAUTH_TOKEN);
-console.log('EBAY_OAUTH_TOKEN starts with:', process.env.EBAY_OAUTH_TOKEN?.substring(0, 2));
-console.log('EBAY_SANDBOX:', process.env.EBAY_SANDBOX);
 const axios = require('axios');
 const cron = require('node-cron');
 const cheerio = require('cheerio');
@@ -74,45 +68,85 @@ async function loadConfig() {
 
 async function checkEbayStore(store) {
     try {
-        console.log(`${getTimestamp()} Checking store: ${store.name}`);
-        const startTime = Date.now();
-        let bytesReceived = 0;
-        let requestCount = 0;
-        let itemsProcessed = 0;
         const storeId = store.url.split('/str/')[1].split('/')[0];
         const url = `https://www.ebay.ca/sch/i.html?_nkw=&_sacat=0&_sop=10&_dmd=2&_ipg=200&_ssn=${storeId}`;
-        console.log(`${getTimestamp()} Fetching store items from: ${url}`);
+        console.log(`${getTimestamp()} 🏪 Scanning store: ${store.name}`);
 
         const response = await axios.get(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
                 'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Cache-Control': 'max-age=0'
+                'Upgrade-Insecure-Requests': '1'
             }
         });
 
         const $ = cheerio.load(response.data);
         const items = [];
 
-        $('.s-item').each((_, element) => {
+        // Check for protection/error pages
+        if (response.data.includes('Pardon Our Interruption') || response.data.includes('Checking your browser')) {
+            console.log(`${getTimestamp()} ⚠️ Bot protection detected for store ${store.name}`);
+        }
+
+        let storeItemIndex = 0;
+        
+        // Try multiple selectors as eBay has changed their structure
+        const storeSelectors = [
+            'ul.srp-results li.s-item',
+            '.srp-river-results li.s-item', 
+            'ul.srp-results li.s-card',
+            '.srp-river-results li.s-card',
+            '.s-item'  // fallback to original
+        ];
+        
+        let storeItemElements = $();
+        for (const selector of storeSelectors) {
+            const elements = $(selector);
+            if (elements.length > 0) {
+                storeItemElements = elements;
+                break;
+            }
+        }
+        
+        storeItemElements.each((_, element) => {
+            storeItemIndex++;
             const $item = $(element);
-            const title = $item.find('.s-item__title').text().trim();
-            if (title === 'Shop on eBay') return;
+            
+            // Try multiple title selectors for different eBay structures
+            let title = $item.find('.s-item__title').text().trim() || 
+                       $item.find('.s-card__image img').attr('alt') || 
+                       $item.find('img').attr('alt') || 
+                       $item.find('h3').text().trim() || '';
+            
+            if (title === 'Shop on eBay') {
+                return;
+            }
 
-            const price = $item.find('.s-item__price').text().trim();
-            const url = $item.find('a.s-item__link').attr('href');
-            const imageUrl = $item.find('.s-item__image-img').attr('src');
-            const condition = $item.find('.SECONDARY_INFO').text().trim();
-            const shipping = $item.find('.s-item__shipping').text().trim();
-            const location = $item.find('.s-item__location').text().trim();
-            const bids = $item.find('.s-item__bids').text().trim();
-            const timeLeft = $item.find('.s-item__time-left').text().trim();
-            const itemId = url.split('/itm/')[1]?.split('?')[0] || '';
-
-            if (itemId) {
+            // Try multiple selectors for different eBay structures
+            const price = $item.find('.s-item__price').text().trim() || 
+                         $item.find('.notranslate').text().trim() || '';
+            
+            const url = $item.find('a.s-item__link').attr('href') || 
+                       $item.find('a').first().attr('href') || '';
+            
+            const imageUrl = $item.find('.s-item__image-img').attr('src') || 
+                            $item.find('img').attr('src') || '';
+            
+            const condition = $item.find('.SECONDARY_INFO').text().trim() || 
+                             $item.find('.clipped').text().trim() || '';
+            
+            const shipping = $item.find('.s-item__shipping').text().trim() || '';
+            const location = $item.find('.s-item__location').text().trim() || '';
+            const bids = $item.find('.s-item__bids').text().trim() || '';
+            const timeLeft = $item.find('.s-item__time-left').text().trim() || '';
+            
+            const itemId = url ? url.split('/itm/')[1]?.split('?')[0] || '' : '';
+            
+            if (itemId && title) {
                 items.push({
                     id: itemId,
                     title: cleanTitle(title),
@@ -128,8 +162,6 @@ async function checkEbayStore(store) {
             }
         });
 
-        console.log(`${getTimestamp()} Total items found on page: ${items.length}`);
-
         let newItems = 0;
         let notifiedItems = 0;
 
@@ -144,9 +176,9 @@ async function checkEbayStore(store) {
             }
         }
 
-        console.log(`${getTimestamp()} New items found: ${newItems}`);
+        console.log(`${getTimestamp()} ✅ Store ${store.name}: ${items.length} items scanned, ${newItems} new found`);
         if (isFirstRun && newItems > 2) {
-            console.log(`${getTimestamp()} Note: ${newItems - 2} additional new items found but not notified to prevent spam`);
+            console.log(`${getTimestamp()} 📢 Limited notifications to 2 items on first run`);
         }
 
         // After successful store check, record stats
@@ -163,48 +195,85 @@ async function checkEbayStore(store) {
 
 async function checkEbaySearch(search) {
     try {
-        console.log(`${getTimestamp()} Checking search: ${search.name}`);
-        const startTime = Date.now();
-        let bytesReceived = 0;
-        let requestCount = 0;
-        let itemsProcessed = 0;
-
-        // Use the URL directly for webscrape mode
         const url = search.url;
-        console.log(`${getTimestamp()} Fetching search results from: ${url}`);
+        console.log(`${getTimestamp()} 🔍 Scanning search: ${search.name}`);
 
         const response = await axios.get(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
                 'Referer': 'https://www.ebay.ca/'
-                // 'Cookie': '...' // (optional, from a real browser session)
             }
         });
 
         const $ = cheerio.load(response.data);
         const items = [];
 
-        $('.s-item').each((_, element) => {
+        // Check for protection/error pages
+        if (response.data.includes('Pardon Our Interruption') || response.data.includes('Checking your browser')) {
+            console.log(`${getTimestamp()} ⚠️ Bot protection detected for search: ${search.name}`);
+        }
+        
+        let itemIndex = 0;
+        
+        // Try multiple selectors as eBay has changed their structure
+        const selectors = [
+            'ul.srp-results li.s-item',
+            '.srp-river-results li.s-item', 
+            'ul.srp-results li.s-card',
+            '.srp-river-results li.s-card',
+            '.s-item'  // fallback to original
+        ];
+        
+        let itemElements = $();
+        for (const selector of selectors) {
+            const elements = $(selector);
+            if (elements.length > 0) {
+                itemElements = elements;
+                break;
+            }
+        }
+        
+        itemElements.each((_, element) => {
+            itemIndex++;
             const $item = $(element);
-            const title = $item.find('.s-item__title').text().trim();
-            if (title === 'Shop on eBay') return;
+            
+            // Try multiple title selectors for different eBay structures
+            let title = $item.find('.s-item__title').text().trim() || 
+                       $item.find('.s-card__image img').attr('alt') || 
+                       $item.find('img').attr('alt') || 
+                       $item.find('h3').text().trim() || '';
+            
+            if (title === 'Shop on eBay') {
+                return;
+            }
 
-            const price = $item.find('.s-item__price').text().trim();
-            const url = $item.find('a.s-item__link').attr('href');
-            const imageUrl = $item.find('.s-item__image-img').attr('src');
-            const condition = $item.find('.SECONDARY_INFO').text().trim();
-            const shipping = $item.find('.s-item__shipping').text().trim();
-            const location = $item.find('.s-item__location').text().trim();
-            const bids = $item.find('.s-item__bids').text().trim();
-            const timeLeft = $item.find('.s-item__time-left').text().trim();
-            const itemId = url.split('/itm/')[1]?.split('?')[0] || '';
-
-            if (itemId) {
+            // Try multiple selectors for different eBay structures
+            const price = $item.find('.s-item__price').text().trim() || 
+                         $item.find('.notranslate').text().trim() || '';
+            
+            const url = $item.find('a.s-item__link').attr('href') || 
+                       $item.find('a').first().attr('href') || '';
+            
+            const imageUrl = $item.find('.s-item__image-img').attr('src') || 
+                            $item.find('img').attr('src') || '';
+            
+            const condition = $item.find('.SECONDARY_INFO').text().trim() || 
+                             $item.find('.clipped').text().trim() || '';
+            
+            const shipping = $item.find('.s-item__shipping').text().trim() || '';
+            const location = $item.find('.s-item__location').text().trim() || '';
+            const bids = $item.find('.s-item__bids').text().trim() || '';
+            const timeLeft = $item.find('.s-item__time-left').text().trim() || '';
+            
+            const itemId = url ? url.split('/itm/')[1]?.split('?')[0] || '' : '';
+            
+            if (itemId && title) {
                 items.push({
                     id: itemId,
                     title: cleanTitle(title),
@@ -219,8 +288,6 @@ async function checkEbaySearch(search) {
                 });
             }
         });
-
-        console.log(`${getTimestamp()} Total items found on page: ${items.length}`);
 
         // Sort items by listing date (newest first)
         items.sort((a, b) => {
@@ -243,9 +310,9 @@ async function checkEbaySearch(search) {
             }
         }
 
-        console.log(`${getTimestamp()} New items found: ${newItems}`);
+        console.log(`${getTimestamp()} ✅ Search ${search.name}: ${items.length} items scanned, ${newItems} new found`);
         if (isFirstRun && newItems > 2) {
-            console.log(`${getTimestamp()} Note: ${newItems - 2} additional new items found but not notified to prevent spam`);
+            console.log(`${getTimestamp()} 📢 Limited notifications to 2 items on first run`);
         }
 
         // After successful search check, record stats
@@ -384,9 +451,17 @@ async function checkEbaySearchAPI(search) {
 
         // Build filter array
         const filterArray = [
-            'deliveryCountry:CA',
             'buyingOptions:{FIXED_PRICE|AUCTION}'
         ];
+        
+        // Add default delivery country only if not specified in custom filters
+        let hasDeliveryCountryFilter = false;
+        if (search.filters && search.filters.length > 0) {
+            hasDeliveryCountryFilter = search.filters.some(filter => filter.type === '3');
+        }
+        if (!hasDeliveryCountryFilter) {
+            filterArray.push('deliveryCountry:CA');
+        }
 
         // Add price filters if specified
         if (search.minPrice) {
@@ -396,9 +471,33 @@ async function checkEbaySearchAPI(search) {
             filterArray.push(`price:[..${search.maxPrice}]`);
         }
 
-        // Add additional filters
+        // Add additional filters - convert from config format to API format
         if (search.filters && search.filters.length > 0) {
-            filterArray.push(...search.filters);
+            for (const filter of search.filters) {
+                let filterString = '';
+                switch (filter.type) {
+                    case '1': // Condition
+                        filterString = `conditions:{${filter.value}}`;
+                        break;
+                    case '2': // Buying Options
+                        filterString = `buyingOptions:{${filter.value}}`;
+                        break;
+                    case '3': // Location
+                        filterString = `deliveryCountry:${filter.value}`;
+                        break;
+                    case '4': // Free Shipping
+                        if (filter.value === 'true') {
+                            filterString = 'maxDeliveryCost:0';
+                        }
+                        break;
+                    case '5': // Returns Accepted
+                        filterString = `returnsAccepted:${filter.value}`;
+                        break;
+                }
+                if (filterString) {
+                    filterArray.push(filterString);
+                }
+            }
         }
 
         // Log the full filter string for debugging
@@ -741,12 +840,13 @@ async function checkEbayStoreScraping(storeId) {
         
         const response = await axios.get(searchUrl, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
                 'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Cache-Control': 'max-age=0'
+                'Upgrade-Insecure-Requests': '1'
             }
         });
 
@@ -754,48 +854,62 @@ async function checkEbayStoreScraping(storeId) {
         const items = [];
         let totalItemsFound = 0;
 
-        // Find all item containers
-        $('.s-item').each((_, element) => {
-            try {
-                const $item = $(element);
-                totalItemsFound++;
+        // Try multiple selectors for item containers - Updated for current eBay structure
+        const itemSelectors = [
+            'ul.srp-results li.s-card',           // Current eBay structure
+            '.srp-river-results li.s-card',       // Alternative current structure  
+            'ul.srp-results li.s-item',           // Legacy structure
+            '.s-item',                            // Legacy structure
+            '.srp-result', 
+            '[data-view="mi:1686"]', 
+            '.s-item__wrapper'
+        ];
+        let itemsFoundWithSelector = false;
+        
+        for (const selector of itemSelectors) {
+            const elements = $(selector);
+            if (elements.length > 0) {
+                itemsFoundWithSelector = true;
                 
-                // Skip the first item if it's the "Shop on eBay" item
-                if ($item.find('.s-item__title').text().trim() === 'Shop on eBay') {
-                    return;
-                }
-
-                // Extract item ID from data-listing-id attribute
-                let itemId = $item.attr('data-listing-id');
-                
-                // If no data-listing-id, try to get it from the URL
-                if (!itemId) {
-                    const itemUrl = $item.find('.s-item__link').attr('href');
-                    if (itemUrl) {
-                        const match = itemUrl.match(/\/(\d+)\?/);
-                        if (match) {
-                            itemId = match[1];
+                elements.each((_, element) => {
+                    try {
+                        const $item = $(element);
+                        totalItemsFound++;
+                        
+                        // Extract title from s-card__image alt attribute (confirmed working structure)
+                        let title = $item.find('.s-card__image').attr('alt') || 
+                                   $item.find('img').first().attr('alt') || '';
+                        if (!title || title === 'Shop on eBay') {
+                            return;
                         }
-                    }
-                }
 
-                // Skip items without valid IDs
-                if (!itemId) {
-                    return;
-                }
+                        // Extract item ID from data-listing-id attribute or URL
+                        let itemId = $item.attr('data-listing-id');
+                        
+                        // Extract URL from /itm/ link (confirmed working)
+                        const itemUrl = $item.find('a[href*="/itm/"]').first().attr('href');
+                        if (!itemUrl) {
+                            return;
+                        }
+                        
+                        // If no data-listing-id, try to get it from the URL
+                        if (!itemId) {
+                            itemId = itemUrl.split('/itm/')[1]?.split('?')[0] || itemUrl.match(/\/(\d+)(\?|$)/)?.[1] || '';
+                        }
 
-                // Get the item URL
-                const itemUrl = $item.find('.s-item__link').attr('href');
-                if (!itemUrl) {
-                    return;
-                }
+                        // Skip items without valid IDs
+                        if (!itemId) {
+                            return;
+                        }
 
-                // Extract other item details
-                const title = cleanTitle($item.find('.s-item__title').text());
-                const price = $item.find('.s-item__price').text().trim();
-                const condition = $item.find('.SECONDARY_INFO').text().trim();
-                const location = $item.find('.s-item__location').text().trim();
-                const imageUrl = $item.find('.s-item__image-img').attr('src');
+                        // Extract other item details with multiple selectors
+                        title = cleanTitle(title);
+                        const price = $item.find('.s-item__price, .notranslate, .u-flL.condText, .s-card__price, .s-card__price span').first().text().trim();
+                        const condition = $item.find('.SECONDARY_INFO, .s-item__subtitle, .cldt').first().text().trim();
+                        const location = $item.find('.s-item__location, .s-item__itemLocation, .lvdetails').first().text().trim();
+                        const imageUrl = $item.find('.s-card__image').attr('src') || 
+                                        $item.find('img').first().attr('src') ||
+                                        $item.find('img').first().attr('data-src');
 
                 // Get listing type (Auction/Buy It Now)
                 let listingType = 'Unknown';
@@ -809,14 +923,14 @@ async function checkEbayStoreScraping(storeId) {
                     listingType = 'Auction';
                 }
 
-                // Get shipping info
-                const shipping = $item.find('.s-item__shipping').text().trim();
-                
-                // Get time left for auctions
-                const timeLeft = $item.find('.s-item__time-left').text().trim();
-                
-                // Get number of bids for auctions
-                const bids = $item.find('.s-item__bids').text().trim();
+                        // Get shipping info
+                        const shipping = $item.find('.s-item__shipping, .s-item__logisticsCost, .vi-acc-del-range').first().text().trim();
+                        
+                        // Get time left for auctions
+                        const timeLeft = $item.find('.s-item__time-left, .s-item__timeLeft, .timeMs').first().text().trim();
+                        
+                        // Get number of bids for auctions
+                        const bids = $item.find('.s-item__bids, .s-item__bidCount, .bidsold').first().text().trim();
                 
                 // Get item specifics if available
                 const specifics = [];
@@ -827,27 +941,36 @@ async function checkEbayStoreScraping(storeId) {
                     }
                 });
 
-                // Check if this is a new item
-                if (itemCache.isNewItem('store', storeId, itemId)) {
-                    items.push({
-                        id: itemId,
-                        title,
-                        price,
-                        condition,
-                        location,
-                        url: itemUrl,
-                        imageUrl,
-                        listingType,
-                        shipping,
-                        timeLeft,
-                        bids,
-                        specifics: specifics.join(' | ')
-                    });
-                }
-            } catch (error) {
-                console.error('Error processing item:', error.message);
+                        // Check if this is a new item
+                        if (itemCache.isNewItem('store', storeId, itemId)) {
+                            items.push({
+                                id: itemId,
+                                title,
+                                price,
+                                condition,
+                                location,
+                                url: itemUrl,
+                                imageUrl,
+                                listingType,
+                                shipping,
+                                timeLeft,
+                                bids,
+                                specifics: specifics.join(' | ')
+                            });
+                        }
+                    } catch (error) {
+                        console.error('Error processing item:', error.message);
+                    }
+                });
+                
+                // Break after finding items with the first working selector
+                break;
             }
-        });
+        }
+        
+        if (!itemsFoundWithSelector) {
+            console.log(`${getTimestamp()} No items found with any selector. eBay structure may have changed.`);
+        }
 
         console.log(`${getTimestamp()} Total items found on page: ${totalItemsFound}`);
         console.log(`${getTimestamp()} New items found: ${items.length}`);
@@ -868,7 +991,13 @@ async function checkEbaySearchScraping(url) {
         console.log(`${getTimestamp()} Fetching search results from: ${url}`);
         const response = await axios.get(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
             }
         });
 
@@ -876,48 +1005,62 @@ async function checkEbaySearchScraping(url) {
         const items = [];
         let totalItemsFound = 0;
 
-        // Find all item containers
-        $('.s-item__wrapper').each((_, element) => {
-            try {
-                const $item = $(element);
-                totalItemsFound++;
+        // Try multiple selectors for item containers - Updated for current eBay structure
+        const itemSelectors = [
+            'ul.srp-results li.s-card',           // Current eBay structure
+            '.srp-river-results li.s-card',       // Alternative current structure  
+            'ul.srp-results li.s-item',           // Legacy structure
+            '.s-item',                            // Legacy structure
+            '.srp-result', 
+            '[data-view="mi:1686"]', 
+            '.s-item__wrapper'
+        ];
+        let itemsFoundWithSelector = false;
+        
+        for (const selector of itemSelectors) {
+            const elements = $(selector);
+            if (elements.length > 0) {
+                itemsFoundWithSelector = true;
                 
-                // Skip the first item if it's the "Shop on eBay" item
-                if ($item.find('.s-item__title').text().trim() === 'Shop on eBay') {
-                    return;
-                }
-
-                // Extract item ID from data-listing-id attribute
-                let itemId = $item.attr('data-listing-id');
-                
-                // If no data-listing-id, try to get it from the URL
-                if (!itemId) {
-                    const itemUrl = $item.find('.s-item__link').attr('href');
-                    if (itemUrl) {
-                        const match = itemUrl.match(/\/(\d+)\?/);
-                        if (match) {
-                            itemId = match[1];
+                elements.each((_, element) => {
+                    try {
+                        const $item = $(element);
+                        totalItemsFound++;
+                        
+                        // Extract title from s-card__image alt attribute (confirmed working structure)
+                        let title = $item.find('.s-card__image').attr('alt') || 
+                                   $item.find('img').first().attr('alt') || '';
+                        if (!title || title === 'Shop on eBay') {
+                            return;
                         }
-                    }
-                }
 
-                // Skip items without valid IDs
-                if (!itemId) {
-                    return;
-                }
+                        // Extract item ID from data-listing-id attribute or URL
+                        let itemId = $item.attr('data-listing-id');
+                        
+                        // Extract URL from /itm/ link (confirmed working)
+                        const itemUrl = $item.find('a[href*="/itm/"]').first().attr('href');
+                        if (!itemUrl) {
+                            return;
+                        }
+                        
+                        // If no data-listing-id, try to get it from the URL
+                        if (!itemId) {
+                            itemId = itemUrl.split('/itm/')[1]?.split('?')[0] || itemUrl.match(/\/(\d+)(\?|$)/)?.[1] || '';
+                        }
 
-                // Get the item URL
-                const itemUrl = $item.find('.s-item__link').attr('href');
-                if (!itemUrl) {
-                    return;
-                }
+                        // Skip items without valid IDs
+                        if (!itemId) {
+                            return;
+                        }
 
-                // Extract other item details
-                const title = cleanTitle($item.find('.s-item__title').text());
-                const price = $item.find('.s-item__price').text().trim();
-                const condition = $item.find('.SECONDARY_INFO').text().trim();
-                const location = $item.find('.s-item__location').text().trim();
-                const imageUrl = $item.find('.s-item__image-img').attr('src');
+                        // Extract other item details with multiple selectors
+                        title = cleanTitle(title);
+                        const price = $item.find('.s-item__price, .notranslate, .u-flL.condText, .s-card__price, .s-card__price span').first().text().trim();
+                        const condition = $item.find('.SECONDARY_INFO, .s-item__subtitle, .cldt').first().text().trim();
+                        const location = $item.find('.s-item__location, .s-item__itemLocation, .lvdetails').first().text().trim();
+                        const imageUrl = $item.find('.s-card__image').attr('src') || 
+                                        $item.find('img').first().attr('src') ||
+                                        $item.find('img').first().attr('data-src');
 
                 // Get listing type (Auction/Buy It Now)
                 let listingType = 'Unknown';
@@ -931,14 +1074,14 @@ async function checkEbaySearchScraping(url) {
                     listingType = 'Auction';
                 }
 
-                // Get shipping info
-                const shipping = $item.find('.s-item__shipping').text().trim();
-                
-                // Get time left for auctions
-                const timeLeft = $item.find('.s-item__time-left').text().trim();
-                
-                // Get number of bids for auctions
-                const bids = $item.find('.s-item__bids').text().trim();
+                        // Get shipping info
+                        const shipping = $item.find('.s-item__shipping, .s-item__logisticsCost, .vi-acc-del-range').first().text().trim();
+                        
+                        // Get time left for auctions
+                        const timeLeft = $item.find('.s-item__time-left, .s-item__timeLeft, .timeMs').first().text().trim();
+                        
+                        // Get number of bids for auctions
+                        const bids = $item.find('.s-item__bids, .s-item__bidCount, .bidsold').first().text().trim();
                 
                 // Get item specifics if available
                 const specifics = [];
@@ -949,27 +1092,36 @@ async function checkEbaySearchScraping(url) {
                     }
                 });
 
-                // Check if this is a new item
-                if (itemCache.isNewItem('search', url, itemId)) {
-                    items.push({
-                        id: itemId,
-                        title,
-                        price,
-                        condition,
-                        location,
-                        url: itemUrl,
-                        imageUrl,
-                        listingType,
-                        shipping,
-                        timeLeft,
-                        bids,
-                        specifics: specifics.join(' | ')
-                    });
-                }
-            } catch (error) {
-                console.error('Error processing item:', error.message);
+                        // Check if this is a new item
+                        if (itemCache.isNewItem('search', url, itemId)) {
+                            items.push({
+                                id: itemId,
+                                title,
+                                price,
+                                condition,
+                                location,
+                                url: itemUrl,
+                                imageUrl,
+                                listingType,
+                                shipping,
+                                timeLeft,
+                                bids,
+                                specifics: specifics.join(' | ')
+                            });
+                        }
+                    } catch (error) {
+                        console.error('Error processing item:', error.message);
+                    }
+                });
+                
+                // Break after finding items with the first working selector
+                break;
             }
-        });
+        }
+        
+        if (!itemsFoundWithSelector) {
+            console.log(`${getTimestamp()} No items found with any selector. eBay structure may have changed.`);
+        }
 
         console.log(`${getTimestamp()} Total items found on page: ${totalItemsFound}`);
         console.log(`${getTimestamp()} New items found: ${items.length}`);
@@ -990,8 +1142,10 @@ function startMonitoring() {
     isFirstRun = true;
     const apiMode = hasEbayApiToken;
     
-    console.log(`${getTimestamp()} Starting eBay scanner with ${config.stores.length} stores and ${config.searches.length} searches`);
-    console.log(`${getTimestamp()} Using ${apiMode ? 'eBay API' : 'web scraping'} method`);
+    console.log(`\n🚀 eBayScanner Starting...`);
+    console.log(`📊 Monitoring: ${config.stores.length} stores, ${config.searches.length} searches`);
+    console.log(`🔧 Method: ${apiMode ? 'eBay API' : 'Web Scraping'}`);
+    console.log(`⏰ Started at ${getTimestamp()}\n`);
 
     // Filter stores and searches by type
     const storesToScan = config.stores.filter(store => 
@@ -1004,12 +1158,9 @@ function startMonitoring() {
     // Schedule store checks
     storesToScan.forEach(store => {
         if (store.enabled) {
-            const interval = store.interval || 5; // Default to 5 minutes if not specified
-            console.log(`${getTimestamp()} Scheduling store ${store.name} to check every ${interval} minutes`);
-            // Run initial scan
-            console.log(`${getTimestamp()} Running initial scan for store ${store.name}`);
+            const interval = store.interval || 5;
+            console.log(`🏪 Store: ${store.name} (every ${interval}min)`);
             const initialDelay = getRandomDelay(1, 15);
-            console.log(`${getTimestamp()} Waiting ${initialDelay} seconds before initial store scan`);
             setTimeout(() => {
                 checkStoreListings(store);
                 scheduleNextStoreScan(store, interval);
@@ -1020,12 +1171,9 @@ function startMonitoring() {
     // Schedule search checks
     searchesToScan.forEach(search => {
         if (search.enabled) {
-            const interval = search.interval || 5; // Default to 5 minutes if not specified
-            console.log(`${getTimestamp()} Scheduling search ${search.name} to check every ${interval} minutes`);
-            // Run initial scan
-            console.log(`${getTimestamp()} Running initial scan for search ${search.name}`);
+            const interval = search.interval || 5;
+            console.log(`🔍 Search: ${search.name} (every ${interval}min)`);
             const initialDelay = getRandomDelay(1, 15);
-            console.log(`${getTimestamp()} Waiting ${initialDelay} seconds before initial search scan`);
             setTimeout(() => {
                 checkSearchListings(search);
                 scheduleNextSearchScan(search, interval);
