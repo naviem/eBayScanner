@@ -545,9 +545,20 @@ async function checkEbaySearchAPI(search) {
             console.log(`${getTimestamp()} API Warnings:`, response.data.warnings.map(w => w.message).join(', '));
         }
 
-        if (!response.data || !response.data.itemSummaries) {
+        if (!response.data || (!response.data.itemSummaries && response.data.total > 0)) {
             console.error(`${getTimestamp()} Invalid API response format. Response data:`, response.data);
-            throw new Error('Invalid API response format - missing itemSummaries');
+            await sendDiscordErrorNotification(
+                'eBay API Error', 
+                `Invalid API response format for search "${search.name}" - missing itemSummaries but total > 0`,
+                response.data
+            );
+            return { newItems: 0, notifiedItems: 0 };
+        }
+
+        // Handle case where there are no items (total: 0)
+        if (!response.data.itemSummaries || response.data.itemSummaries.length === 0) {
+            console.log(`${getTimestamp()} No items found for search "${search.name}" (total: ${response.data.total})`);
+            return { newItems: 0, notifiedItems: 0 };
         }
 
         const items = response.data.itemSummaries;
@@ -694,10 +705,22 @@ async function checkEbayStoreAPI(store) {
 
         // Only log essential response info
         console.log(`${getTimestamp()} API Response Status:`, response.status);
+        console.log(`${getTimestamp()} Total items found: ${response.data.total}`);
 
-        if (!response.data || !response.data.itemSummaries) {
+        if (!response.data || (!response.data.itemSummaries && response.data.total > 0)) {
             console.error(`${getTimestamp()} Invalid API response format. Response data:`, response.data);
-            throw new Error('Invalid API response format - missing itemSummaries');
+            await sendDiscordErrorNotification(
+                'eBay API Error', 
+                `Invalid API response format for store "${store.name}" - missing itemSummaries but total > 0`,
+                response.data
+            );
+            return { newItems: 0, notifiedItems: 0 };
+        }
+
+        // Handle case where there are no items (total: 0)
+        if (!response.data.itemSummaries || response.data.itemSummaries.length === 0) {
+            console.log(`${getTimestamp()} No items found for store "${store.name}" (total: ${response.data.total})`);
+            return { newItems: 0, notifiedItems: 0 };
         }
 
         const items = response.data.itemSummaries;
@@ -1161,8 +1184,17 @@ function startMonitoring() {
             const interval = store.interval || 5;
             console.log(`🏪 Store: ${store.name} (every ${interval}min)`);
             const initialDelay = getRandomDelay(1, 15);
-            setTimeout(() => {
-                checkStoreListings(store);
+            setTimeout(async () => {
+                try {
+                    await checkStoreListings(store);
+                } catch (error) {
+                    console.error(`${getTimestamp()} Error checking store "${store.name}":`, error.message);
+                    await sendDiscordErrorNotification(
+                        'Store Check Error',
+                        `Failed to check store "${store.name}": ${error.message}`,
+                        { storeName: store.name, error: error.stack }
+                    );
+                }
                 scheduleNextStoreScan(store, interval);
             }, initialDelay * 1000);
         }
@@ -1174,8 +1206,17 @@ function startMonitoring() {
             const interval = search.interval || 5;
             console.log(`🔍 Search: ${search.name} (every ${interval}min)`);
             const initialDelay = getRandomDelay(1, 15);
-            setTimeout(() => {
-                checkSearchListings(search);
+            setTimeout(async () => {
+                try {
+                    await checkSearchListings(search);
+                } catch (error) {
+                    console.error(`${getTimestamp()} Error checking search "${search.name}":`, error.message);
+                    await sendDiscordErrorNotification(
+                        'Search Check Error',
+                        `Failed to check search "${search.name}": ${error.message}`,
+                        { searchName: search.name, error: error.stack }
+                    );
+                }
                 scheduleNextSearchScan(search, interval);
             }, initialDelay * 1000);
         }
@@ -1187,9 +1228,18 @@ function scheduleNextStoreScan(store, interval) {
     const nextScanTime = new Date(Date.now() + (interval * 60 * 1000) + (delay * 1000));
     console.log(`${getTimestamp()} Next store scan scheduled for ${nextScanTime.toLocaleTimeString()} (${interval} minutes plus ${delay} seconds from now)`);
     
-    setTimeout(() => {
+    setTimeout(async () => {
         isFirstRun = false;
-        checkStoreListings(store);
+        try {
+            await checkStoreListings(store);
+        } catch (error) {
+            console.error(`${getTimestamp()} Error checking store "${store.name}":`, error.message);
+            await sendDiscordErrorNotification(
+                'Store Check Error',
+                `Failed to check store "${store.name}": ${error.message}`,
+                { storeName: store.name, error: error.stack }
+            );
+        }
         scheduleNextStoreScan(store, interval);
     }, (interval * 60 * 1000) + (delay * 1000));
 }
@@ -1199,9 +1249,18 @@ function scheduleNextSearchScan(search, interval) {
     const nextScanTime = new Date(Date.now() + (interval * 60 * 1000) + (delay * 1000));
     console.log(`${getTimestamp()} Next search scan scheduled for ${nextScanTime.toLocaleTimeString()} (${interval} minutes plus ${delay} seconds from now)`);
     
-    setTimeout(() => {
+    setTimeout(async () => {
         isFirstRun = false;
-        checkSearchListings(search);
+        try {
+            await checkSearchListings(search);
+        } catch (error) {
+            console.error(`${getTimestamp()} Error checking search "${search.name}":`, error.message);
+            await sendDiscordErrorNotification(
+                'Search Check Error',
+                `Failed to check search "${search.name}": ${error.message}`,
+                { searchName: search.name, error: error.stack }
+            );
+        }
         scheduleNextSearchScan(search, interval);
     }, (interval * 60 * 1000) + (delay * 1000));
 }
@@ -1218,6 +1277,67 @@ function cleanTitle(title) {
         .replace(/^Best Match/i, '')
         .replace(/^Shop on eBay/i, '')
         .trim();
+}
+
+async function sendDiscordErrorNotification(errorType, errorMessage, details = null) {
+    try {
+        console.log(`${getTimestamp()} Sending error notification: ${errorType}`);
+        
+        // Get webhook URL (use first available webhook)
+        let webhookUrl = null;
+        if (config.webhooks.length > 0) {
+            webhookUrl = config.webhooks[0].url;
+        } else {
+            console.log(`${getTimestamp()} No webhooks configured for error notifications`);
+            return;
+        }
+
+        // Create error embed
+        const embed = {
+            title: '🚨 eBay Scanner Error',
+            color: 0xff0000, // Red color for errors
+            fields: [
+                {
+                    name: 'Error Type',
+                    value: errorType,
+                    inline: true
+                },
+                {
+                    name: 'Message',
+                    value: errorMessage,
+                    inline: false
+                }
+            ],
+            timestamp: new Date().toISOString(),
+            footer: {
+                text: 'eBay Scanner Error Alert'
+            }
+        };
+
+        // Add details if provided
+        if (details) {
+            embed.fields.push({
+                name: 'Details',
+                value: typeof details === 'object' ? JSON.stringify(details, null, 2).substring(0, 1000) : details.toString().substring(0, 1000),
+                inline: false
+            });
+        }
+
+        const payload = {
+            embeds: [embed]
+        };
+
+        // Send to Discord
+        const response = await axios.post(webhookUrl, payload);
+
+        if (response.status === 204) {
+            console.log(`${getTimestamp()} Discord error notification sent successfully`);
+        } else {
+            console.error(`${getTimestamp()} Unexpected response from Discord:`, response.status);
+        }
+    } catch (error) {
+        console.error(`${getTimestamp()} Error sending Discord error notification:`, error.message);
+    }
 }
 
 async function sendDiscordNotification(search, item) {
