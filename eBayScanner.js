@@ -449,7 +449,7 @@ async function checkEbaySearchAPI(search) {
         const token = await getEbayToken();
         console.log(`${getTimestamp()} Using category ID: ${search.categoryId}`);
 
-        // Build filter array
+        // Build filter array - create fresh array each time to prevent corruption
         const filterArray = [
             'buyingOptions:{FIXED_PRICE|AUCTION}'
         ];
@@ -501,13 +501,20 @@ async function checkEbaySearchAPI(search) {
         }
 
         // Log the full filter string for debugging
-        console.log(`${getTimestamp()} Full filter string:`, filterArray.join(','));
+        const filterString = filterArray.join(',');
+        console.log(`${getTimestamp()} Full filter string:`, filterString);
+
+        // Validate filter string for corruption
+        if (filterString.includes('CAUCTION') || !filterString.includes('AUCTION')) {
+            console.error(`${getTimestamp()} Filter string corruption detected:`, filterString);
+            console.error(`${getTimestamp()} Original filterArray:`, filterArray);
+        }
 
         const searchParams = {
             'q': search.searchTerm,
             'sort': 'newlyListed',
             'limit': 200,
-            'filter': filterArray.join(',')
+            'filter': filterString
         };
 
         // Add category ID as a separate query parameter if specified
@@ -520,12 +527,8 @@ async function checkEbaySearchAPI(search) {
             }
         }
 
-        console.log(`${getTimestamp()} Making API request with params:`, {
-            q: search.searchTerm,
-            sort: 'newlyListed',
-            limit: 200,
-            filter: filterArray.join(',')
-        });
+        console.log(`${getTimestamp()} Making API request with params:`, searchParams);
+        console.log(`${getTimestamp()} Request URL will be constructed by axios`);
 
         const response = await axios.get('https://api.ebay.com/buy/browse/v1/item_summary/search', {
             params: searchParams,
@@ -545,19 +548,37 @@ async function checkEbaySearchAPI(search) {
             console.log(`${getTimestamp()} API Warnings:`, response.data.warnings.map(w => w.message).join(', '));
         }
 
-        if (!response.data || (!response.data.itemSummaries && response.data.total > 0)) {
-            console.error(`${getTimestamp()} Invalid API response format. Response data:`, response.data);
+        // Handle response validation
+        if (!response.data) {
+            console.error(`${getTimestamp()} No response data from eBay API`);
             await sendDiscordErrorNotification(
-                'eBay API Error', 
-                `Invalid API response format for search "${search.name}" - missing itemSummaries but total > 0`,
+                'eBay API Error',
+                `No response data for search "${search.name}"`,
                 response.data
             );
             return { newItems: 0, notifiedItems: 0 };
         }
 
-        // Handle case where there are no items (total: 0)
-        if (!response.data.itemSummaries || response.data.itemSummaries.length === 0) {
+        // Handle case where there are no items (total: 0) - this is normal
+        if (response.data.total === 0) {
             console.log(`${getTimestamp()} No items found for search "${search.name}" (total: ${response.data.total})`);
+            return { newItems: 0, notifiedItems: 0 };
+        }
+
+        // Only throw error if we expect results but itemSummaries is missing
+        if (response.data.total > 0 && !response.data.itemSummaries) {
+            console.error(`${getTimestamp()} Invalid API response format. Expected items but itemSummaries missing. Response data:`, response.data);
+            await sendDiscordErrorNotification(
+                'eBay API Error',
+                `Invalid API response format for search "${search.name}" - missing itemSummaries but total is ${response.data.total}`,
+                response.data
+            );
+            return { newItems: 0, notifiedItems: 0 };
+        }
+
+        // Handle case where itemSummaries array is empty despite total > 0
+        if (!response.data.itemSummaries || response.data.itemSummaries.length === 0) {
+            console.log(`${getTimestamp()} No items in itemSummaries for search "${search.name}" (total: ${response.data.total})`);
             return { newItems: 0, notifiedItems: 0 };
         }
 
@@ -707,19 +728,37 @@ async function checkEbayStoreAPI(store) {
         console.log(`${getTimestamp()} API Response Status:`, response.status);
         console.log(`${getTimestamp()} Total items found: ${response.data.total}`);
 
-        if (!response.data || (!response.data.itemSummaries && response.data.total > 0)) {
-            console.error(`${getTimestamp()} Invalid API response format. Response data:`, response.data);
+        // Handle response validation
+        if (!response.data) {
+            console.error(`${getTimestamp()} No response data from eBay API`);
             await sendDiscordErrorNotification(
-                'eBay API Error', 
-                `Invalid API response format for store "${store.name}" - missing itemSummaries but total > 0`,
+                'eBay API Error',
+                `No response data for store "${store.name}"`,
                 response.data
             );
             return { newItems: 0, notifiedItems: 0 };
         }
 
-        // Handle case where there are no items (total: 0)
-        if (!response.data.itemSummaries || response.data.itemSummaries.length === 0) {
+        // Handle case where there are no items (total: 0) - this is normal
+        if (response.data.total === 0) {
             console.log(`${getTimestamp()} No items found for store "${store.name}" (total: ${response.data.total})`);
+            return { newItems: 0, notifiedItems: 0 };
+        }
+
+        // Only throw error if we expect results but itemSummaries is missing
+        if (response.data.total > 0 && !response.data.itemSummaries) {
+            console.error(`${getTimestamp()} Invalid API response format. Expected items but itemSummaries missing. Response data:`, response.data);
+            await sendDiscordErrorNotification(
+                'eBay API Error',
+                `Invalid API response format for store "${store.name}" - missing itemSummaries but total is ${response.data.total}`,
+                response.data
+            );
+            return { newItems: 0, notifiedItems: 0 };
+        }
+
+        // Handle case where itemSummaries array is empty despite total > 0
+        if (!response.data.itemSummaries || response.data.itemSummaries.length === 0) {
+            console.log(`${getTimestamp()} No items in itemSummaries for store "${store.name}" (total: ${response.data.total})`);
             return { newItems: 0, notifiedItems: 0 };
         }
 
