@@ -189,7 +189,20 @@ async function checkEbayStore(store) {
         usageStats.recordScan(bytesReceived, requestCount, itemsProcessed);
 
     } catch (error) {
-        console.error(`${getTimestamp()} Error checking store ${store.name}:`, error.message);
+        console.error(`${getTimestamp()} ❌ Error checking store ${store.name}:`, error.message);
+
+        // Send error notification but don't stop the bot
+        await sendDiscordErrorNotification(
+            'eBay Store Scraping Error',
+            `Failed to check store "${store.name}": ${error.message}`,
+            {
+                storeName: store.name,
+                error: error.message,
+                stack: error.stack
+            }
+        );
+
+        console.log(`${getTimestamp()} ⏭️ Skipping store "${store.name}" and continuing with next stores...`);
     }
 }
 
@@ -323,7 +336,20 @@ async function checkEbaySearch(search) {
         usageStats.recordScan(bytesReceived, requestCount, itemsProcessed);
 
     } catch (error) {
-        console.error(`${getTimestamp()} Error checking search ${search.name}:`, error.message);
+        console.error(`${getTimestamp()} ❌ Error checking search ${search.name}:`, error.message);
+
+        // Send error notification but don't stop the bot
+        await sendDiscordErrorNotification(
+            'eBay Search Scraping Error',
+            `Failed to check search "${search.name}": ${error.message}`,
+            {
+                searchName: search.name,
+                error: error.message,
+                stack: error.stack
+            }
+        );
+
+        console.log(`${getTimestamp()} ⏭️ Skipping search "${search.name}" and continuing with next searches...`);
     }
 }
 
@@ -453,7 +479,7 @@ async function checkEbaySearchAPI(search) {
         const filterArray = [
             'buyingOptions:{FIXED_PRICE|AUCTION}'
         ];
-        
+
         // Add default delivery country only if not specified in custom filters
         let hasDeliveryCountryFilter = false;
         if (search.filters && search.filters.length > 0) {
@@ -543,7 +569,7 @@ async function checkEbaySearchAPI(search) {
         // Only log essential response info
         console.log(`${getTimestamp()} API Response Status: ${response.status}`);
         console.log(`${getTimestamp()} Total items found: ${response.data.total}`);
-        
+
         if (response.data.warnings) {
             console.log(`${getTimestamp()} API Warnings:`, response.data.warnings.map(w => w.message).join(', '));
         }
@@ -591,7 +617,7 @@ async function checkEbaySearchAPI(search) {
         for (const item of items) {
             if (itemCache.isNewItem('search', search.name, item.itemId)) {
                 newItems++;
-                
+
                 // Extract shipping cost
                 let shippingCost = 'N/A';
                 if (item.shippingOptions && item.shippingOptions.length > 0) {
@@ -604,7 +630,7 @@ async function checkEbaySearchAPI(search) {
                         }
                     }
                 }
-                
+
                 // Extract price
                 let price = 'N/A';
                 let currency = 'CAD';
@@ -641,7 +667,7 @@ async function checkEbaySearchAPI(search) {
                     itemEndDate: item.itemEndDate,
                     itemCreationDate: item.itemCreationDate
                 };
-                
+
                 newItemsList.push(processedItem);
             }
         }
@@ -649,10 +675,10 @@ async function checkEbaySearchAPI(search) {
         // Then, send notifications in order
         if (newItems > 0) {
             console.log(`${getTimestamp()} Found ${newItems} new items for search "${search.name}"`);
-            
+
             // Send notifications for the first 2 items or all items if not first run
             const itemsToNotify = isFirstRun ? newItemsList.slice(0, 2) : newItemsList;
-            
+
             for (const item of itemsToNotify) {
                 await sendDiscordNotification(search, item);
                 notifiedItems++;
@@ -668,12 +694,26 @@ async function checkEbaySearchAPI(search) {
         return newItemsList;
 
     } catch (error) {
-        console.error('Error using eBay API:', error.message);
+        console.error(`${getTimestamp()} ❌ Error checking search "${search.name}" with eBay API:`, error.message);
         if (error.response) {
-            console.error('API Response Status:', error.response.status);
-            console.error('API Response Headers:', error.response.headers);
+            console.error(`${getTimestamp()} API Response Status:`, error.response.status);
+            console.error(`${getTimestamp()} API Response Headers:`, error.response.headers);
         }
-        throw error;
+
+        // Send error notification but don't stop the bot
+        await sendDiscordErrorNotification(
+            'eBay Search API Error',
+            `Failed to check search "${search.name}": ${error.message}`,
+            {
+                searchName: search.name,
+                error: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText
+            }
+        );
+
+        console.log(`${getTimestamp()} ⏭️ Skipping search "${search.name}" and continuing with next searches...`);
+        return { newItems: 0, notifiedItems: 0 };
     }
 }
 
@@ -848,12 +888,26 @@ async function checkEbayStoreAPI(store) {
         return newItemsList;
 
     } catch (error) {
-        console.error('Error using eBay API:', error.message);
+        console.error(`${getTimestamp()} ❌ Error checking store "${store.name}" with eBay API:`, error.message);
         if (error.response) {
-            console.error('API Response Status:', error.response.status);
-            console.error('API Response Headers:', error.response.headers);
+            console.error(`${getTimestamp()} API Response Status:`, error.response.status);
+            console.error(`${getTimestamp()} API Response Headers:`, error.response.headers);
         }
-        throw error;
+
+        // Send error notification but don't stop the bot
+        await sendDiscordErrorNotification(
+            'eBay Store API Error',
+            `Failed to check store "${store.name}": ${error.message}`,
+            {
+                storeName: store.name,
+                error: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText
+            }
+        );
+
+        console.log(`${getTimestamp()} ⏭️ Skipping store "${store.name}" and continuing with next stores...`);
+        return { newItems: 0, notifiedItems: 0 };
     }
 }
 
@@ -878,12 +932,26 @@ async function getEbayToken() {
 
         return response.data.access_token;
     } catch (error) {
-        console.error('Error getting eBay token:', error.message);
+        console.error(`${getTimestamp()} ❌ Error getting eBay token:`, error.message);
         if (error.response) {
-            console.error('Token Response Status:', error.response.status);
-            console.error('Token Response Data:', error.response.data);
+            console.error(`${getTimestamp()} Token Response Status:`, error.response.status);
+            console.error(`${getTimestamp()} Token Response Data:`, error.response.data);
         }
-        throw error;
+
+        // Send error notification but still throw since this is critical for API calls
+        await sendDiscordErrorNotification(
+            'eBay Token Error',
+            `Failed to get eBay authentication token: ${error.message}`,
+            {
+                error: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data
+            }
+        );
+
+        console.log(`${getTimestamp()} ⏭️ Token request failed, will retry on next scan cycle...`);
+        throw error; // Still throw for token errors as we need this for API calls
     }
 }
 
@@ -1227,12 +1295,13 @@ function startMonitoring() {
                 try {
                     await checkStoreListings(store);
                 } catch (error) {
-                    console.error(`${getTimestamp()} Error checking store "${store.name}":`, error.message);
+                    console.error(`${getTimestamp()} ❌ Error in initial store check "${store.name}":`, error.message);
                     await sendDiscordErrorNotification(
                         'Store Check Error',
                         `Failed to check store "${store.name}": ${error.message}`,
                         { storeName: store.name, error: error.stack }
                     );
+                    console.log(`${getTimestamp()} ⏭️ Continuing with store scanning schedule despite error...`);
                 }
                 scheduleNextStoreScan(store, interval);
             }, initialDelay * 1000);
@@ -1249,12 +1318,13 @@ function startMonitoring() {
                 try {
                     await checkSearchListings(search);
                 } catch (error) {
-                    console.error(`${getTimestamp()} Error checking search "${search.name}":`, error.message);
+                    console.error(`${getTimestamp()} ❌ Error in initial search check "${search.name}":`, error.message);
                     await sendDiscordErrorNotification(
                         'Search Check Error',
                         `Failed to check search "${search.name}": ${error.message}`,
                         { searchName: search.name, error: error.stack }
                     );
+                    console.log(`${getTimestamp()} ⏭️ Continuing with search scanning schedule despite error...`);
                 }
                 scheduleNextSearchScan(search, interval);
             }, initialDelay * 1000);
@@ -1272,12 +1342,13 @@ function scheduleNextStoreScan(store, interval) {
         try {
             await checkStoreListings(store);
         } catch (error) {
-            console.error(`${getTimestamp()} Error checking store "${store.name}":`, error.message);
+            console.error(`${getTimestamp()} ❌ Error in scheduled store check "${store.name}":`, error.message);
             await sendDiscordErrorNotification(
                 'Store Check Error',
                 `Failed to check store "${store.name}": ${error.message}`,
                 { storeName: store.name, error: error.stack }
             );
+            console.log(`${getTimestamp()} ⏭️ Continuing with store scanning schedule despite error...`);
         }
         scheduleNextStoreScan(store, interval);
     }, (interval * 60 * 1000) + (delay * 1000));
@@ -1293,12 +1364,13 @@ function scheduleNextSearchScan(search, interval) {
         try {
             await checkSearchListings(search);
         } catch (error) {
-            console.error(`${getTimestamp()} Error checking search "${search.name}":`, error.message);
+            console.error(`${getTimestamp()} ❌ Error in scheduled search check "${search.name}":`, error.message);
             await sendDiscordErrorNotification(
                 'Search Check Error',
                 `Failed to check search "${search.name}": ${error.message}`,
                 { searchName: search.name, error: error.stack }
             );
+            console.log(`${getTimestamp()} ⏭️ Continuing with search scanning schedule despite error...`);
         }
         scheduleNextSearchScan(search, interval);
     }, (interval * 60 * 1000) + (delay * 1000));

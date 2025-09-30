@@ -3,4 +3,4 @@ WORKDIR /app
 COPY . .
 RUN npm install
 VOLUME ["/app/data"]
-CMD ["node", "index.js"] 
+CMD ["node", "eBayScanner.js"] 

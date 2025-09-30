@@ -2,9 +2,9 @@
   "name": "ebay-scanner",
   "version": "1.0.0",
   "description": "eBay store and search monitor with Discord notifications",
-  "main": "index.js",
+  "main": "eBayScanner.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node eBayScanner.js",
     "config": "node config-manager.js"
   },
   "dependencies": {
